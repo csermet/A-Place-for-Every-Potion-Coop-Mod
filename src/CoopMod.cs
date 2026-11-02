@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using HarmonyLib;
 using Il2Cpp;
 using Il2CppCodeBase.Components.Hero;
@@ -28,21 +29,116 @@ namespace PotionCoop
 
         HeroFacade _hero;
         LabPotionsPopulator _populator;
+        WorldSnapshot _snapshot;
+        bool _loggedFirstUpdate;
+        bool _loggedNoKeyboard;
+        bool _legacyInputBroken;
 
         public override void OnInitializeMelon()
         {
             Log = LoggerInstance;
-            Log.Msg("PotionCoop loaded (phase 0 probe)");
+            Log.Msg("PotionCoop loaded (phase 1 probe)");
         }
+
+        public override void OnLateInitializeMelon() => XrefDump.Run();
 
         public override void OnUpdate()
         {
-            var kb = Keyboard.current;
-            if (kb == null || !kb.ctrlKey.isPressed)
-                return;
+            if (!_loggedFirstUpdate)
+            {
+                _loggedFirstUpdate = true;
+                Log.Msg($"[probe] OnUpdate alive {Stamp()}");
+            }
 
-            if (kb.f7Key.wasPressedThisFrame)
+            if (Pressed(Key.F7, KeyCode.F7))
                 DumpHero();
+            else if (Pressed(Key.F5, KeyCode.F5))
+                TakeSnapshot();
+            else if (Pressed(Key.F6, KeyCode.F6))
+                RestoreSnapshot();
+        }
+
+        // Ctrl+key. Tries the new Input System first, then legacy Input as a fallback, and logs which one fired.
+        bool Pressed(Key key, KeyCode legacy)
+        {
+            var kb = Keyboard.current;
+            if (kb == null)
+            {
+                if (!_loggedNoKeyboard)
+                {
+                    _loggedNoKeyboard = true;
+                    Log.Msg("[probe] Keyboard.current is null");
+                }
+            }
+            else if (kb[key].wasPressedThisFrame)
+            {
+                var ctrl = kb.ctrlKey.isPressed;
+                Log.Msg($"[probe] InputSystem saw {key} (ctrl={ctrl})");
+                return ctrl;
+            }
+
+            if (_legacyInputBroken)
+                return false;
+            try
+            {
+                if (Input.GetKeyDown(legacy))
+                {
+                    var ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
+                    Log.Msg($"[probe] legacy Input saw {legacy} (ctrl={ctrl})");
+                    return ctrl;
+                }
+            }
+            catch (Exception e)
+            {
+                _legacyInputBroken = true;
+                Log.Msg($"[probe] legacy Input unavailable: {e.GetType().Name}");
+            }
+            return false;
+        }
+
+        bool EnsurePopulator()
+        {
+            if (_populator == null)
+                _populator = WorldState.FindPopulator();
+            if (_populator == null || !_populator.IsPopulated)
+            {
+                Log.Msg("[probe] level not loaded");
+                return false;
+            }
+            return true;
+        }
+
+        void TakeSnapshot()
+        {
+            if (!EnsurePopulator())
+                return;
+            var sw = Stopwatch.StartNew();
+            _snapshot = WorldState.Capture(_populator);
+            Log.Msg($"[probe] snapshot taken in {sw.ElapsedMilliseconds} ms: {WorldState.Summary(_snapshot)}");
+        }
+
+        void RestoreSnapshot()
+        {
+            if (_snapshot == null)
+            {
+                Log.Msg("[probe] no snapshot (press Ctrl+F5 first)");
+                return;
+            }
+            if (!EnsurePopulator())
+                return;
+            var sw = Stopwatch.StartNew();
+            try
+            {
+                WorldState.Apply(_populator, _snapshot);
+            }
+            catch (Exception e)
+            {
+                Log.Error($"[probe] apply failed: {e}");
+            }
+            var after = WorldState.Capture(_populator);
+            var off = _snapshot.Potions.Values.Count(t =>
+                after.Potions.TryGetValue(t.Uid, out var a) && (!t.SamePlace(a) || !t.SameUnits(a)));
+            Log.Msg($"[probe] restore took {sw.ElapsedMilliseconds} ms; still different: {off}; now {WorldState.Summary(after)}");
         }
 
         void DumpHero()
