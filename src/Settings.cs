@@ -28,7 +28,7 @@ namespace PotionCoop
             // its own id and starts with its own Windows user name instead of ours.
             var machine = Environment.MachineName;
             var copied = !string.IsNullOrEmpty(_machine.Value) && _machine.Value != machine;
-            if (copied)
+            if (copied || string.IsNullOrWhiteSpace(_name.Value))
                 _name.Value = Environment.UserName;
             if (copied || string.IsNullOrWhiteSpace(_hostId.Value))
                 _hostId.Value = Guid.NewGuid().ToString("N");
