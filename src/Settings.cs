@@ -21,7 +21,18 @@ namespace PotionCoop
             _port = category.CreateEntry("Port", 47777, description: "TCP portu (keşif için Port+1 UDP kullanılır)");
             _hostAddress = category.CreateEntry("HostAddress", "", description: "Boşsa host ağda otomatik aranır; bulunamazsa host'un IP'sini yaz (ör. 192.168.1.20)");
             _verbose = category.CreateEntry("Verbose", false, description: "Gönderilen her değişikliği logla");
+            _hostId = category.CreateEntry("HostId", "", description: "Bu kurulumun kimliği (katılanlar profillerini buna göre ayırır); değiştirme");
+            if (string.IsNullOrWhiteSpace(_hostId.Value))
+            {
+                _hostId.Value = Guid.NewGuid().ToString("N");
+                Save();
+            }
         }
+
+        static MelonPreferences_Entry<string> _hostId;
+
+        /// <summary>Stable id of this install, sent when hosting: a guest keeps one profile per host.</summary>
+        public static string HostId => _hostId.Value;
 
         public static string Name => string.IsNullOrWhiteSpace(_name.Value) ? "Player" : _name.Value.Trim();
         public static string RawName => _name.Value;

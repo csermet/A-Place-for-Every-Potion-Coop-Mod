@@ -127,10 +127,20 @@ namespace PotionCoop.UI
             Settings.Save();
         }
 
+        static float _showAt = -1f;
+
+        /// <summary>Open the window once the main menu is up (e.g. after being sent back there, to say why).</summary>
+        public static void ShowSoon() => _showAt = Now + 1.2f;
+
         /// <summary>Per frame: follow the window's life, keep its rows current, scan the LAN while not connected.</summary>
         public static void Tick()
         {
             TextBox.Tick();
+            if (_showAt > 0f && Now >= _showAt && GameFlow.InLobby && UiClone.ButtonTemplate != null)
+            {
+                _showAt = -1f;
+                Show();
+            }
             if (_window == null)
             {
                 if (_status != null || Built.Count > 0)
@@ -237,7 +247,7 @@ namespace PotionCoop.UI
                 return $"idle|{string.Join(",", Found.Keys.OrderBy(k => k))}|{Found.Count == 0 && WaitedForHosts}|{Coop.JoinBlocker}|{Coop.Status != Coop.StatusOff}";
             if (Coop.IsHost)
                 return $"host|{string.Join(",", _myAddresses)}|{Coop.IsConnected}";
-            return $"client|{Coop.IsConnected}";
+            return $"client|{Coop.IsConnected}|{Coop.Stage}|{GameFlow.InLobby}";
         }
 
         static void Rebuild()
@@ -317,17 +327,43 @@ namespace PotionCoop.UI
             if (!Coop.IsConnected)
                 Note("If they don't see you in the list, they can type this address under “Join by IP”.");
             var stop = Row("Co-op session");
-            Button(stop, "STOP HOSTING", Coop.Stop, primary: false, width: 240f, right: 4f);
+            Button(stop, "STOP HOSTING", Coop.Leave, primary: false, width: 240f, right: 4f);
         }
 
         static void BuildClient()
         {
-            Note(Coop.IsConnected
-                ? $"You are in {Coop.RemoteName}'s world. Your XP and skills stay your own."
-                : "Connecting to the host…");
+            var host = Coop.RemoteName;
+            if (!Coop.IsConnected)
+                Note("Connecting to the host…");
+            else
+            {
+                switch (Coop.Stage)
+                {
+                    case Coop.GuestStage.Choosing:
+                        Note($"First time in {host}'s lab. Start your own progress here, or begin with {host}'s level and skills. Your solo save stays as it is.");
+                        var fresh = Row("Start fresh at level 1");
+                        Button(fresh, "START FRESH", () => Coop.ChooseProfile(false), primary: false, width: 240f, right: 4f);
+                        var copy = Row($"Same level and skills as {host}");
+                        copy.Label.rectTransform.sizeDelta = new Vector2(480f, 40f);
+                        Button(copy, "COPY LEVEL", () => Coop.ChooseProfile(true), primary: true, width: 240f, right: 4f);
+                        break;
+                    case Coop.GuestStage.WaitingForHost:
+                        Note($"Waiting for {host} to enter the lab…");
+                        break;
+                    default:
+                        if (GameFlow.InLobby)
+                        {
+                            var enter = Row($"{host}'s lab");
+                            Button(enter, "ENTER LAB", Coop.GuestProceed, primary: true, width: 240f, right: 4f);
+                        }
+                        else
+                            Note($"You are in {host}'s lab. Your XP and skills here are your own profile for this host.");
+                        break;
+                }
+            }
             StatusRow();
             var stop = Row("Co-op session");
-            Button(stop, "DISCONNECT", Coop.Stop, primary: false, width: 260f, right: 4f);
+            Button(stop, "DISCONNECT", Coop.Leave, primary: false, width: 260f, right: 4f);
         }
 
         static void JoinTyped()

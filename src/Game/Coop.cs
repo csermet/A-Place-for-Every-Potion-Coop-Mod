@@ -57,6 +57,16 @@ namespace PotionCoop.Game
         static float _nextPlayerSend;
         static float _nextPing;
 
+        // guest: what the host told us about its lab, and where we are on the way in
+        public enum GuestStage { None, WaitingForHost, Choosing, Entering }
+        public static GuestStage Stage { get; private set; }
+        static string _hostId;
+        static NetWorldInfo _hostWorld;
+        static NetPersonal _hostPersonal;
+        static string[] _hostBuckets;
+        // host: the world was sent for the lab we are in
+        static bool _worldSentThisLab;
+
         public static bool IsHost => _session != null && _session.IsHost;
         public static bool IsConnected => _session != null && _session.IsConnected && _ready;
         public static bool IsRunning => _session != null;
@@ -83,13 +93,154 @@ namespace PotionCoop.Game
                 _responder = new DiscoveryResponder(Settings.DiscoveryPort, Settings.Port, Settings.Name);
                 Status = $"hosting, waiting for a player (port {Settings.Port})";
                 CoopMod.Log.Msg($"hosting on TCP {Settings.Port}, discovery UDP {Settings.DiscoveryPort}");
+                // From the main menu, hosting means playing: straight into the lab.
+                if (GameFlow.InLobby)
+                    MainThread.Post(GameFlow.HostEnterLab);
             }
             catch (Exception e)
             {
-                Status = $"could not start hosting: {e.Message}";
-                CoopMod.Log.Error(Status);
+                var inUse = e is System.Net.Sockets.SocketException { SocketErrorCode: System.Net.Sockets.SocketError.AddressAlreadyInUse };
                 Stop();
+                Status = inUse ? "another game on this PC is already hosting" : $"could not start hosting: {e.Message}";
+                CoopMod.Log.Warning(Status);
             }
+        }
+
+        /// <summary>The player chose to end the session (Co-op window). A guest goes back to the main menu.</summary>
+        public static void Leave()
+        {
+            var guest = IsRunning && !IsHost;
+            Stop();
+            if (guest)
+            {
+                Status = "you left the session";
+                GuestLeave();
+            }
+        }
+
+        // ---------- guest: into the host's lab and out again ----------
+
+        /// <summary>Guest in the main menu: on to the host's lab (choosing a profile first the very first time).</summary>
+        public static void GuestProceed()
+        {
+            if (!IsConnected || IsHost || !GameFlow.InLobby)
+                return;
+            if (_hostWorld == null || !_hostWorld.Valid)
+            {
+                Stage = GuestStage.WaitingForHost;
+                Status = $"waiting for {_remoteName} to enter the lab…";
+                return;
+            }
+            if (Profiles.ActiveHostId != _hostId)
+            {
+                if (!Profiles.Exists(_hostId))
+                {
+                    Stage = GuestStage.Choosing;
+                    Status = $"first time in {_remoteName}'s lab";
+                    UI.CoopPanel.Show();
+                    return;
+                }
+                if (!Profiles.Enter(_hostId, _hostWorld, _hostBuckets, null))
+                    return;
+            }
+            EnterHostLab();
+        }
+
+        /// <summary>Guest's first visit: a new profile, fresh or at the host's level.</summary>
+        public static void ChooseProfile(bool copyHostLevel)
+        {
+            if (Stage != GuestStage.Choosing || !IsConnected)
+                return;
+            var progress = GameFlow.Data?.Get<Il2CppCodeBase.Services.PersistentDataService.PlayerProgress>();
+            if (progress == null)
+                return;
+            var seed = copyHostLevel && _hostPersonal != null
+                ? new NetPersonal
+                {
+                    Xp = _hostPersonal.Xp,
+                    StartingXp = _hostPersonal.StartingXp,
+                    Onboarding = progress.OnboardingFlags.Value,
+                    Owned = _hostPersonal.Owned,
+                    SwitchedOff = _hostPersonal.SwitchedOff,
+                }
+                : Profiles.Fresh(progress);
+            if (Profiles.Enter(_hostId, _hostWorld, _hostBuckets, seed))
+                EnterHostLab();
+        }
+
+        static void EnterHostLab()
+        {
+            Stage = GuestStage.Entering;
+            Status = $"entering {_remoteName}'s lab…";
+            GameFlow.GuestEnterLab();
+        }
+
+        /// <summary>Guest lost the session: back to the main menu and the solo profile, with the window saying why.</summary>
+        static void GuestLeave()
+        {
+            Stage = GuestStage.None;
+            if (!Profiles.Active)
+                return;
+            GameFlow.ToMainMenu();
+            Profiles.ExitSoon();
+            UI.CoopPanel.ShowSoon();
+        }
+
+        /// <summary>Every game state change (from <see cref="GameStatePatch"/>).</summary>
+        public static void OnStateEntered(eGameState state)
+        {
+            if (state == eGameState.LoadLevel)
+                _worldSentThisLab = false;
+            if (state == eGameState.Playing)
+            {
+                if (IsConnected && IsHost && !_worldSentThisLab)
+                    SendWorld();
+                if (IsConnected && !IsHost)
+                {
+                    Stage = GuestStage.None;
+                    Status = $"playing in {_remoteName}'s lab";
+                }
+            }
+            // A guest back in the menu without a link leaves the host's profile.
+            if (state == eGameState.Lobby && Profiles.Active && !IsConnected)
+                Profiles.ExitSoon();
+        }
+
+        /// <summary>Host's answer to a guest: who we are, which lab, our own level (if they want to start there) and the world.</summary>
+        static WelcomeMsg Welcome()
+        {
+            var welcome = new WelcomeMsg { Name = Settings.Name, HostId = Settings.HostId };
+            var progress = GameFlow.Data?.Get<Il2CppCodeBase.Services.PersistentDataService.PlayerProgress>();
+            if (progress != null)
+            {
+                welcome.World = Profiles.ReadWorld(progress);
+                welcome.HostPersonal = Profiles.ReadPersonal(progress);
+                // In the menu the lab may be about to change (host is entering it): the guest waits for SendWorld.
+                if (GameRefs.InLevel)
+                    welcome.Buckets = Profiles.ReadWorldBuckets();
+                else
+                    welcome.World.GameStarted = false;
+            }
+            return welcome;
+        }
+
+        static void SendWorld()
+        {
+            var progress = GameFlow.Data?.Get<Il2CppCodeBase.Services.PersistentDataService.PlayerProgress>();
+            if (progress == null)
+                return;
+            _worldSentThisLab = true;
+            _session.Send(new WorldMsg { World = Profiles.ReadWorld(progress), Buckets = Profiles.ReadWorldBuckets() });
+        }
+
+        // ---------- pours ----------
+
+        public static bool CanSendPour => IsConnected && !World.Applying && GameRefs.InLevel;
+
+        public static void SendPour(VesselRef from, VesselRef to, eSectionFamily family, int units)
+        {
+            if (CanSendPour)
+                _session.Send(new PourMsg { From = from, To = to, F = (int)family, N = units });
         }
 
         /// <summary>Joining is done from the main menu, so the shared world is loaded into the co-op save folder.</summary>
@@ -147,7 +298,7 @@ namespace PotionCoop.Game
         public static void Stop()
         {
             if (_session != null && GameRefs.InLevel && _ghost != null)
-                World.DropRemoteHeld(_ghost.Position);
+                World.DropRemoteHeld();
             _session?.Dispose();
             _session = null;
             _responder?.Dispose();
@@ -181,17 +332,23 @@ namespace PotionCoop.Game
         public static void Update()
         {
             MainThread.Drain();
-            if (_session == null)
-                return;
-
-            while (_session != null && _session.Poll(out var frame))
+            Profiles.Tick();
+            if (_session != null)
             {
-                try { Handle(frame); }
-                catch (Exception e) { CoopMod.Log.Error($"message failed: {e}"); }
+                while (_session != null && _session.Poll(out var frame))
+                {
+                    try { Handle(frame); }
+                    catch (Exception e) { CoopMod.Log.Error($"message failed: {e}"); }
+                }
             }
 
             if (!IsConnected)
+            {
+                // Bottles still on their way (e.g. put down when the other player left) finish their flight.
+                if (GameRefs.InLevel)
+                    World.TickMotion(null, Time.unscaledDeltaTime);
                 return;
+            }
 
             if (GameRefs.InLevel)
             {
@@ -213,6 +370,7 @@ namespace PotionCoop.Game
                 ScanStep();
                 _ghost?.Tick(Time.unscaledDeltaTime);
                 World.TickMotion(_ghost, Time.unscaledDeltaTime);
+                Pours.Tick();
                 if (IsHost)
                     CatSync.HostTick(_session, Now);
                 else
@@ -256,16 +414,17 @@ namespace PotionCoop.Game
             {
                 var who = string.IsNullOrEmpty(_remoteName) ? "the other player" : _remoteName;
                 if (GameRefs.InLevel && _ghost != null)
-                    World.DropRemoteHeld(_ghost.Position);
+                    World.DropRemoteHeld();
                 var wasReady = _ready;
                 ResetLink();
                 if (IsHost)
                     Status = wasReady ? $"{who} left; waiting for a player" : $"hosting, waiting for a player (port {Settings.Port})";
                 else
                 {
-                    Status = wasReady ? "connection lost (join again from Co-op)" : "could not connect (IP, port or firewall?)";
+                    Status = wasReady ? $"{who} left the game or the connection was lost" : "could not connect (IP, port or firewall?)";
                     _session?.Dispose();
                     _session = null;
+                    GuestLeave();
                 }
                 CoopMod.Log.Msg($"link closed: {Status}");
                 return;
@@ -295,19 +454,31 @@ namespace PotionCoop.Game
                     }
                     _remoteName = hello.Name;
                     _ready = true;
-                    _session.Send(new WelcomeMsg { Name = Settings.Name });
+                    _session.Send(Welcome());
+                    _worldSentThisLab = GameRefs.InLevel;
                     Status = $"{_remoteName} joined";
                     CoopMod.Log.Msg($"{_remoteName} joined from {_session.RemoteAddress}");
                     return;
 
                 case "welcome" when !IsHost:
-                    _remoteName = msg.body.ToObject<WelcomeMsg>().Name;
+                    var welcome = msg.body.ToObject<WelcomeMsg>();
+                    _remoteName = welcome.Name;
+                    _hostId = welcome.HostId;
+                    _hostWorld = welcome.World;
+                    _hostPersonal = welcome.HostPersonal;
+                    _hostBuckets = welcome.Buckets;
                     _ready = true;
-                    SavePaths.Activate();
-                    Status = SavePaths.HasStartedGame()
-                        ? $"connected to {_remoteName}: press Continue"
-                        : $"connected to {_remoteName}: no save on this PC yet, press New Game";
-                    CoopMod.Log.Msg($"joined {_remoteName}'s world");
+                    Status = $"connected to {_remoteName}";
+                    CoopMod.Log.Msg($"joined {_remoteName}'s world (host {_hostId}, lab {_hostWorld?.LabManifestHash})");
+                    GuestProceed();
+                    return;
+
+                case "world" when !IsHost:
+                    var world = msg.body.ToObject<WorldMsg>();
+                    _hostWorld = world.World;
+                    _hostBuckets = world.Buckets;
+                    if (Stage == GuestStage.WaitingForHost)
+                        GuestProceed();
                     return;
 
                 case "reject":
@@ -340,6 +511,14 @@ namespace PotionCoop.Game
             {
                 if (GameRefs.InLevel)
                     OnPlayer(msg.body.ToObject<PlayerMsg>());
+                return;
+            }
+
+            if (msg.type == "pour")
+            {
+                // Only worth playing while it happens; the final states follow anyway.
+                if (GameRefs.InLevel)
+                    Pours.Play(msg.body.ToObject<PourMsg>());
                 return;
             }
 

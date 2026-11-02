@@ -20,9 +20,53 @@ namespace PotionCoop
             GameRefs.State = __0;
             if (__0 is eGameState.LoadLevel or eGameState.LoadLobby or eGameState.Lobby)
                 Coop.OnLevelLeft();
-            // Back in the menu without a live co-op link: the client's next game is solo again.
-            if (__0 is eGameState.Lobby && !(Coop.IsRunning && !Coop.IsHost))
-                SavePaths.Deactivate();
+            Coop.OnStateEntered(__0);
+        }
+    }
+
+    /// <summary>
+    /// The game stages each save in "&lt;save folder&gt;/.key.tmp", building that path itself. For the keys we
+    /// redirect, the staged file must sit in the same (profile) folder as the file it replaces.
+    /// </summary>
+    [HarmonyPatch(typeof(SaveFileWrite), MethodType.Constructor, new[] { typeof(string), typeof(string) })]
+    static class SaveTempPathPatch
+    {
+        static void Postfix(SaveFileWrite __instance, string __0)
+        {
+            if (SavePaths.Active)
+                __instance._tempPath = SavePaths.Redirect(__0, __instance._tempPath);
+        }
+    }
+
+    /// <summary>
+    /// A guest connected to a host must never start a new game: it would reset the guest's progress and
+    /// the host's world on this side. The menu's New Game then continues in the host's lab instead.
+    /// </summary>
+    [HarmonyPatch(typeof(Il2CppCodeBase.Components.UI.AdvancedButtonNewGameStarter), nameof(Il2CppCodeBase.Components.UI.AdvancedButtonNewGameStarter.AdvancedButton_OnUp))]
+    static class GuestNewGamePatch
+    {
+        static bool Prefix()
+        {
+            if (!Coop.IsRunning || Coop.IsHost)
+                return true;
+            MainThread.Post(Coop.GuestProceed);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Likewise Continue: a connected guest must load the host's lab through its profile, never the solo lab
+    /// (the host's states would be written into the solo save).
+    /// </summary>
+    [HarmonyPatch(typeof(Il2CppCodeBase.Components.UI.AdvancedButtonContinueStarter), nameof(Il2CppCodeBase.Components.UI.AdvancedButtonContinueStarter.AdvancedButton_OnUp))]
+    static class GuestContinuePatch
+    {
+        static bool Prefix()
+        {
+            if (!Coop.IsRunning || Coop.IsHost)
+                return true;
+            MainThread.Post(Coop.GuestProceed);
+            return false;
         }
     }
 
@@ -84,6 +128,30 @@ namespace PotionCoop
             var potion = source != null ? source.TryCast<PotionFacade>() : null;
             if (potion != null)
                 Coop.MarkPotion(potion);
+        }
+
+        // A pour starting here: the other side plays it while it happens (the final states follow as usual).
+
+        [HarmonyPostfix, HarmonyPatch(typeof(PotionFacade), nameof(PotionFacade.PourOutInto))]
+        static void PourStarted(PotionFacade __instance, IPourVessel __0, eSectionFamily __1, int __2, bool __3)
+        {
+            if (__3 || !Coop.CanSendPour)
+                return;
+            var to = Pours.Ref(__0);
+            if (to != null)
+                Coop.SendPour(new Net.VesselRef { K = Net.VesselRef.Potion, U = __instance.Uid }, to, __1, __2);
+        }
+
+        [HarmonyPostfix, HarmonyPatch(typeof(VatFacade), nameof(VatFacade.DrawOutInto))]
+        static void DrawStarted(VatFacade __instance, VatTapFacade __0, PotionFacade __1, eSectionFamily __2, int __3, bool __4)
+        {
+            if (__4 || !Coop.CanSendPour || __0 == null || __1 == null)
+                return;
+            var tap = Pours.TapIndex(__instance, __0);
+            if (tap < 0)
+                return;
+            Coop.SendPour(new Net.VesselRef { K = Net.VesselRef.Tap, U = __instance.Uid, I = tap },
+                new Net.VesselRef { K = Net.VesselRef.Potion, U = __1.Uid }, __2, __3);
         }
     }
 

@@ -33,6 +33,8 @@ namespace PotionCoop.UI
 
         static readonly bool OpenOnStart = Array.IndexOf(Environment.GetCommandLineArgs(), "--coop-open") >= 0;
         static bool _openedOnStart;
+        static readonly bool PauseInLab = Array.IndexOf(Environment.GetCommandLineArgs(), "--coop-pause") >= 0;
+        static float _pauseAt = -1f;
 
         public static void Tick()
         {
@@ -41,6 +43,17 @@ namespace PotionCoop.UI
             {
                 _openedOnStart = true;
                 CoopPanel.Show();
+            }
+            // --coop-pause: pause a few seconds after entering the lab (to look at the pause menu without a keyboard).
+            if (PauseInLab && GameRefs.State == eGameState.Playing)
+            {
+                if (_pauseAt < 0f)
+                    _pauseAt = Time.realtimeSinceStartup + 5f;
+                else if (Time.realtimeSinceStartup >= _pauseAt)
+                {
+                    _pauseAt = float.MaxValue;
+                    GameFlow.Machine?.Enter(eGameState.Paused);
+                }
             }
             if (!Enabled || _step >= Windows.Length * 2 || GameRefs.State != eGameState.Lobby || Time.realtimeSinceStartup < _next)
                 return;

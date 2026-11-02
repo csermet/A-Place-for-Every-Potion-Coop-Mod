@@ -1,83 +1,48 @@
 using System;
 using System.IO;
-using Il2CppCodeBase.Services.SaveLoadService;
 
 namespace PotionCoop.Game
 {
     /// <summary>
-    /// On the client, the shared world is loaded from and saved to a separate "CoopSession" folder,
-    /// so the friend's own solo world is never overwritten. Personal progress (XP, skills) keeps its usual file.
+    /// While a guest plays in someone's lab, the shared world and the guest's progress for that host are loaded from
+    /// and saved to that host's profile folder (see <see cref="Profiles"/>), so the guest's own solo save is never
+    /// touched. Every save path of those keys (file, staged temp file, backup) is rewritten into the folder.
     /// </summary>
     internal static class SavePaths
     {
         public const string WorldKeyPrefix = "PotionsPersistentData";
-        const string FolderName = "CoopSession";
+        public const string ProgressKey = "PlayerProgress";
 
-        public static bool Active { get; private set; }
+        static string _folder;
 
-        static string SaveDir => SaveLoadService.SaveDirectoryPath();
-        static string CoopDir => Path.Combine(SaveDir, FolderName);
+        public static bool Active => _folder != null;
 
-        public static void Activate()
+        public static void Activate(string folder)
         {
-            if (Active)
-                return;
-            try
-            {
-                Directory.CreateDirectory(CoopDir);
-                // First co-op session on this PC: start from a copy of the solo world; the host's state is applied on top.
-                if (Directory.GetFiles(CoopDir, WorldKeyPrefix + "*").Length == 0)
-                {
-                    foreach (var file in Directory.GetFiles(SaveDir))
-                    {
-                        var name = Path.GetFileName(file);
-                        if (name.StartsWith(WorldKeyPrefix) || name.StartsWith("." + WorldKeyPrefix))
-                            File.Copy(file, Path.Combine(CoopDir, name));
-                    }
-                }
-                Active = true;
-                CoopMod.Log.Msg($"world saves redirected to {CoopDir}");
-            }
-            catch (Exception e)
-            {
-                CoopMod.Log.Error($"could not prepare {CoopDir}: {e.Message}");
-            }
-        }
-
-        /// <summary>Has this PC ever started a game (so the menu offers Continue)?</summary>
-        public static bool HasStartedGame()
-        {
-            try
-            {
-                var progress = Path.Combine(SaveDir, "PlayerProgress");
-                return File.Exists(progress) && File.ReadAllText(progress).Contains("\"GameStarted\":true");
-            }
-            catch (Exception)
-            {
-                return true;
-            }
+            Directory.CreateDirectory(folder);
+            _folder = folder.Replace('\\', '/').TrimEnd('/');
+            CoopMod.Log.Msg($"saves redirected to {_folder}");
         }
 
         public static void Deactivate()
         {
             if (!Active)
                 return;
-            Active = false;
-            CoopMod.Log.Msg("world saves back to the solo folder");
+            _folder = null;
+            CoopMod.Log.Msg("saves back to the solo folder");
         }
 
-        /// <summary>Rewrites a save-file path for a world key into the co-op folder.</summary>
+        static bool IsRedirected(string key) => key != null && (key.StartsWith(WorldKeyPrefix) || key == ProgressKey);
+
+        /// <summary>Rewrites a save-file path ("…/Key", "…/.Key.tmp", "…/.Key.bak") into the active profile folder.</summary>
         public static string Redirect(string key, string path)
         {
-            if (!Active || key == null || path == null || !key.StartsWith(WorldKeyPrefix))
+            if (!Active || path == null || !IsRedirected(key))
                 return path;
             var cut = Math.Max(path.LastIndexOf('/'), path.LastIndexOf('\\'));
-            if (cut < 0)
-                return path;
-            var dir = path.Substring(0, cut);
-            if (dir.EndsWith(FolderName))
-                return path;
-            return dir + "/" + FolderName + path.Substring(cut);
+            var name = cut >= 0 ? path.Substring(cut + 1) : path;
+            var redirected = _folder + "/" + name;
+            return string.Equals(path.Replace('\\', '/'), redirected, StringComparison.OrdinalIgnoreCase) ? path : redirected;
         }
     }
 }

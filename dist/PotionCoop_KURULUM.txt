@@ -16,14 +16,15 @@ KURULUM (arkadaşının bilgisayarı)
    (Yalnızca ev ağından gelen bağlantılara izin verir.)
 
 NASIL OYNANIR? (oyun İngilizce olduğu için modun menüsü de İngilizce)
-- Host (dünyası kullanılacak kişi):
-  1. Ana menüde Co-op'a tıkla > HOST.
-  2. Pencereyi kapat (X) ve "Continue" ile oyuna gir.
-  Pencerede "Your IP" satırında IP adresin yazar (ör. 192.168.1.20); arkadaşın seni otomatik bulamazsa bunu kullanır.
-- Katılan:
-  1. Ana menüde Co-op'a tıkla. "Games on your network" listesinde host'u gör > JOIN.
-  2. Bağlanınca pencereyi kapat ve "Continue"a bas. Bu bilgisayarda hiç oynanmadıysa "New Game"e bas.
-  3. Oyuna girince host'un dünyası birkaç saniyede yüklenir. Üstteki durum çubuğunda "in sync ✓" görünür.
+- Host (dünyası kullanılacak kişi): ana menüde Co-op > HOST. Oyun kendiliğinden laboratuvara girer.
+  Co-op penceresinde "Your IP" satırında IP adresin yazar (ör. 192.168.1.20); arkadaşın seni bulamazsa bunu kullanır.
+- Katılan: ana menüde Co-op > "Games on your network" listesinde host'u gör > JOIN.
+  - Bu host'a ilk kez katılıyorsan seçim çıkar:
+      START FRESH  = bu host'un dünyasında 1. seviyeden başla
+      COPY LEVEL   = host'un seviyesi ve yetenekleriyle başla
+    Bu ilerleme bu bilgisayarda, o host'a özel bir profilde saklanır. Kendi tek kişilik kaydına dokunulmaz.
+  - Sonra oyun kendiliğinden host'un laboratuvarına girer. Üstte "in sync ✓" görünür.
+  - Host oyundan çıkarsa ya da bağlantı koparsa ana menüye dönersin; Co-op penceresi sebebini yazar.
 - İsmini Co-op penceresindeki "Your name" kutusuna tıklayıp yazabilirsin (Enter ile bitir).
 - Oyun içindeyken ESC menüsünde de Co-op girişi var (durum, bağlantıyı kesme).
 - Yedek kısayollar (Ctrl ile): F8 host aç/kapat, F9 katıl, F10 yeniden senkron, F11 bağlantıyı kes,

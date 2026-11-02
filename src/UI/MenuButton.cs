@@ -54,6 +54,7 @@ namespace PotionCoop.UI
                 foreach (var text in entry.GetComponentsInChildren<TMP_Text>(true))
                     text.text = "Co-op";
                 entry.SetActive(true);
+                MakeRoom(settingsEntry);
                 CoopMod.Log.Msg($"Co-op entry added to {Describe(settingsEntry.transform)}");
             }
             catch (Exception e)
@@ -62,6 +63,37 @@ namespace PotionCoop.UI
                     return;
                 _reportedFailure = true;
                 CoopMod.Log.Error($"could not add the Co-op menu entry: {e}");
+            }
+        }
+
+        /// <summary>
+        /// In a framed window (the pause menu) the list sits in a panel of fixed height: grow the list and the panel
+        /// by one entry, or the last entry (Quit to Menu) ends up below the frame. The main menu has no panel.
+        /// </summary>
+        static void MakeRoom(GameObject settingsEntry)
+        {
+            var list = settingsEntry.transform.parent;
+            Transform panel = null;
+            for (var t = list; t != null && t.GetComponent<Canvas>() == null; t = t.parent)
+                if (t.name == "Panel")
+                {
+                    panel = t;
+                    break;
+                }
+            if (panel == null)
+                return;
+            var layout = list.GetComponent<HorizontalOrVerticalLayoutGroup>();
+            var height = settingsEntry.GetComponent<RectTransform>().rect.height + (layout != null ? layout.spacing : 0f);
+            if (height <= 1f)
+                return;
+            for (var t = list; t != null; t = t.parent)
+            {
+                var rect = t.TryCast<RectTransform>();
+                // Only boxes of fixed height: stretched ones follow their parent, fitted ones size themselves.
+                if (rect != null && Mathf.Approximately(rect.anchorMin.y, rect.anchorMax.y) && t.GetComponent<ContentSizeFitter>() == null)
+                    rect.sizeDelta += new Vector2(0f, height);
+                if (t == panel)
+                    break;
             }
         }
 
