@@ -76,6 +76,37 @@ namespace PotionCoop.Game
         public static double PingMs { get; private set; } = -1;
         /// <summary>Client: the host's vat capacities (they follow the host's skills, see <see cref="VatCapacityPatch"/>).</summary>
         public static readonly Dictionary<int, int> HostVatCapacity = new();
+        /// <summary>Guest: the host's separator rules (see <see cref="SeparatorRulesPatches"/>), null until known.</summary>
+        public static NetSeparatorRules HostSeparator { get; private set; }
+
+        /// <summary>Guest: our separator follows the host's.</summary>
+        public static bool FollowHostSeparator => HostSeparator != null && IsConnected && !IsHost;
+
+        static NetSeparatorRules ReadSeparatorRules()
+        {
+            try
+            {
+                var mediator = GameFlow.Mediator?.Separator;
+                if (mediator == null)
+                    return null;
+                var usable = new bool[16];
+                for (var i = 0; i < usable.Length; i++)
+                    usable[i] = mediator.IsHolderUsable(i);
+                return new NetSeparatorRules
+                {
+                    Unlocked = mediator.IsUnlocked,
+                    Capacity = mediator.Capacity,
+                    LoopRanks = mediator.LoopRanksBought,
+                    HolderRanks = mediator.HolderRanksBought,
+                    HolderUsable = usable,
+                };
+            }
+            catch (Exception e)
+            {
+                CoopMod.Log.Warning($"separator rules: {e.Message}");
+                return null;
+            }
+        }
         /// <summary>null = unknown, true = worlds match, false = healing.</summary>
         public static bool? InSync { get; private set; }
         public static Ghost Ghost => _ghost;
@@ -209,7 +240,7 @@ namespace PotionCoop.Game
         /// <summary>Host's answer to a guest: who we are, which lab, our own level (if they want to start there) and the world.</summary>
         static WelcomeMsg Welcome()
         {
-            var welcome = new WelcomeMsg { Name = Settings.Name, HostId = Settings.HostId };
+            var welcome = new WelcomeMsg { Name = Settings.Name, HostId = Settings.HostId, Separator = ReadSeparatorRules() };
             var progress = GameFlow.Data?.Get<Il2CppCodeBase.Services.PersistentDataService.PlayerProgress>();
             if (progress != null)
             {
@@ -320,6 +351,7 @@ namespace PotionCoop.Game
             PendingSettle.Clear();
             SentFalling.Clear();
             HostVatCapacity.Clear();
+            HostSeparator = null;
             Array.Clear(FruitlessResyncs, 0, FruitlessResyncs.Length);
             Array.Clear(MismatchStreak, 0, MismatchStreak.Length);
             _ghost?.Destroy();
@@ -467,6 +499,7 @@ namespace PotionCoop.Game
                     _hostWorld = welcome.World;
                     _hostPersonal = welcome.HostPersonal;
                     _hostBuckets = welcome.Buckets;
+                    HostSeparator = welcome.Separator;
                     _ready = true;
                     Status = $"connected to {_remoteName}";
                     CoopMod.Log.Msg($"joined {_remoteName}'s world (host {_hostId}, lab {_hostWorld?.LabManifestHash})");
@@ -550,6 +583,8 @@ namespace PotionCoop.Game
                     if (digest.VatCapacity != null)
                         foreach (var pair in digest.VatCapacity)
                             HostVatCapacity[pair.Key] = pair.Value;
+                    if (digest.Separator != null)
+                        HostSeparator = digest.Separator;
                     CompareDigest(digest.Buckets);
                     break;
             }
@@ -610,6 +645,12 @@ namespace PotionCoop.Game
         {
             if (ShouldTrack() && vat != null)
                 DirtyVats.Add(vat.Uid);
+        }
+
+        public static void MarkSeparator(Il2CppCodeBase.Components.EssenceSeparator.EssenceSeparatorFacade separator)
+        {
+            if (ShouldTrack() && separator != null)
+                DirtyVats.Add(separator.Uid);
         }
 
         static bool ShouldTrack() => IsConnected && !World.Applying && GameRefs.InLevel;
@@ -676,6 +717,9 @@ namespace PotionCoop.Game
                 foreach (var vat in World.Vats())
                     if (DirtyVats.Contains(vat.Uid))
                         msg.Vats.Add(World.ReadVat(vat));
+                foreach (var separator in World.Separators())
+                    if (DirtyVats.Contains(separator.Uid))
+                        msg.Vats.Add(World.ReadSeparator(separator));
                 DirtyVats.Clear();
             }
 
@@ -697,7 +741,10 @@ namespace PotionCoop.Game
                 if (wanted.Contains(Protocol.BucketOf(entry.Key)))
                     msg.Potions.Add(World.Read(populator, entry.Value, held));
             if (wanted.Contains(0))
+            {
                 msg.Vats.AddRange(World.Vats().Select(World.ReadVat));
+                msg.Vats.AddRange(World.Separators().Select(World.ReadSeparator));
+            }
             _session.Send(msg);
             CoopMod.Log.Msg($"sent {msg.Potions.Count} vessel(s) for bucket(s) {string.Join(",", buckets)}");
         }
@@ -736,6 +783,8 @@ namespace PotionCoop.Game
                 _scanAcc = new uint[Protocol.BucketCount];
                 foreach (var vat in World.Vats())
                     _scanAcc[0] += World.Hash(World.ReadVat(vat));
+                foreach (var separator in World.Separators())
+                    _scanAcc[0] += World.Hash(World.ReadSeparator(separator));
                 _scanIndex = 0;
                 _scanCostMs = 0;
                 _scanWorstFrameMs = 0;
@@ -784,6 +833,7 @@ namespace PotionCoop.Game
                 {
                     Buckets = _myDigest,
                     VatCapacity = World.Vats().ToDictionary(v => v.Uid, v => v.Capacity),
+                    Separator = ReadSeparatorRules(),
                 });
             if (Now >= _nextScanReport)
             {

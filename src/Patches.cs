@@ -28,13 +28,27 @@ namespace PotionCoop
     /// The game stages each save in "&lt;save folder&gt;/.key.tmp", building that path itself. For the keys we
     /// redirect, the staged file must sit in the same (profile) folder as the file it replaces.
     /// </summary>
-    [HarmonyPatch(typeof(SaveFileWrite), MethodType.Constructor, new[] { typeof(string), typeof(string) })]
+    /// (The constructor that builds it cannot be hooked natively, so the path is fixed when the write starts:
+    /// the staged file always goes next to the file it will replace.)
+    [HarmonyPatch(typeof(SaveFileWrite), nameof(SaveFileWrite.Write))]
     static class SaveTempPathPatch
     {
-        static void Postfix(SaveFileWrite __instance, string __0)
+        static void Prefix(SaveFileWrite __instance)
         {
-            if (SavePaths.Active)
-                __instance._tempPath = SavePaths.Redirect(__0, __instance._tempPath);
+            try
+            {
+                var file = __instance._filePath;
+                var key = __instance._key;
+                if (string.IsNullOrEmpty(file) || string.IsNullOrEmpty(key))
+                    return;
+                var cut = System.Math.Max(file.LastIndexOf('/'), file.LastIndexOf('\\'));
+                if (cut < 0)
+                    return;
+                var temp = file.Substring(0, cut) + "/." + key + ".tmp";
+                if (__instance._tempPath != temp)
+                    __instance._tempPath = temp;
+            }
+            catch (System.Exception) { }
         }
     }
 
@@ -104,6 +118,53 @@ namespace PotionCoop
 
         [HarmonyPostfix, HarmonyPatch(nameof(PotionsPersistence.RecordVat))]
         static void Vat(Il2CppCodeBase.Components.Vats.VatFacade __0) => Coop.MarkVat(__0);
+
+        [HarmonyPostfix, HarmonyPatch(nameof(PotionsPersistence.RecordSeparator))]
+        static void Separator(Il2CppCodeBase.Components.EssenceSeparator.EssenceSeparatorFacade __0) => Coop.MarkSeparator(__0);
+    }
+
+    /// <summary>
+    /// The Essence Separator is shared, but whether it is unlocked, its capacity and its usable holders come from
+    /// the player's own skills and progress. On the guest they follow the host's, like the vats' capacity.
+    /// </summary>
+    [HarmonyPatch(typeof(Il2CppCodeBase.Services.DataMediatorService.EssenceSeparatorDataMediator))]
+    static class SeparatorRulesPatches
+    {
+        [HarmonyPostfix, HarmonyPatch(nameof(Il2CppCodeBase.Services.DataMediatorService.EssenceSeparatorDataMediator.IsUnlocked), MethodType.Getter)]
+        static void Unlocked(ref bool __result)
+        {
+            if (Coop.FollowHostSeparator)
+                __result = Coop.HostSeparator.Unlocked;
+        }
+
+        [HarmonyPostfix, HarmonyPatch(nameof(Il2CppCodeBase.Services.DataMediatorService.EssenceSeparatorDataMediator.Capacity), MethodType.Getter)]
+        static void Capacity(ref int __result)
+        {
+            if (Coop.FollowHostSeparator && Coop.HostSeparator.Capacity > 0)
+                __result = Coop.HostSeparator.Capacity;
+        }
+
+        [HarmonyPostfix, HarmonyPatch(nameof(Il2CppCodeBase.Services.DataMediatorService.EssenceSeparatorDataMediator.LoopRanksBought), MethodType.Getter)]
+        static void LoopRanks(ref int __result)
+        {
+            if (Coop.FollowHostSeparator)
+                __result = Coop.HostSeparator.LoopRanks;
+        }
+
+        [HarmonyPostfix, HarmonyPatch(nameof(Il2CppCodeBase.Services.DataMediatorService.EssenceSeparatorDataMediator.HolderRanksBought), MethodType.Getter)]
+        static void HolderRanks(ref int __result)
+        {
+            if (Coop.FollowHostSeparator)
+                __result = Coop.HostSeparator.HolderRanks;
+        }
+
+        [HarmonyPostfix, HarmonyPatch(nameof(Il2CppCodeBase.Services.DataMediatorService.EssenceSeparatorDataMediator.IsHolderUsable))]
+        static void HolderUsable(int __0, ref bool __result)
+        {
+            var usable = Coop.FollowHostSeparator ? Coop.HostSeparator.HolderUsable : null;
+            if (usable != null && __0 >= 0 && __0 < usable.Length)
+                __result = usable[__0];
+        }
     }
 
     /// <summary>

@@ -73,10 +73,24 @@ namespace PotionCoop.Net
         public int[] SwitchedOff = new int[0];
     }
 
+    /// <summary>
+    /// The host's Essence Separator rules. They come from the host's skills and progress but shape the shared
+    /// separator, so a guest's separator follows them (unlocked, capacity, usable holders).
+    /// </summary>
+    internal sealed class NetSeparatorRules
+    {
+        public bool Unlocked;
+        public int Capacity;
+        public int LoopRanks;
+        public int HolderRanks;
+        public bool[] HolderUsable;
+    }
+
     internal sealed class WelcomeMsg
     {
         public string T = "welcome";
         public string Name;
+        public NetSeparatorRules Separator;
         /// <summary>Stable id of the host's install: the guest keeps one profile per host.</summary>
         public string HostId;
         public NetWorldInfo World;
@@ -158,6 +172,7 @@ namespace PotionCoop.Net
         public uint[] Buckets;
         /// <summary>Host's vat capacities (vat uid -> units). They depend on the host's skills and rule the shared vats.</summary>
         public Dictionary<int, int> VatCapacity;
+        public NetSeparatorRules Separator;
     }
 
     /// <summary>Client asks the host for the full state of some buckets.</summary>
@@ -181,7 +196,7 @@ namespace PotionCoop.Net
 
     internal static class Protocol
     {
-        public const string ModVersion = "0.4.2";
+        public const string ModVersion = "0.4.3";
         public const int BucketCount = 17;
 
         static readonly JsonSerializerSettings Settings = new()

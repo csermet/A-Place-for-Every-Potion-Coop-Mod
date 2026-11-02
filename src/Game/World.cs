@@ -115,6 +115,24 @@ namespace PotionCoop.Game
             return _vats;
         }
 
+        static EssenceSeparatorFacade[] _separators;
+
+        /// <summary>The Essence Separator(s): a shared liquid fixture like the vats (its loop holds units of essence).</summary>
+        public static EssenceSeparatorFacade[] Separators()
+        {
+            if (_separators == null || _separators.Any(s => s == null))
+                _separators = Object.FindObjectsByType<EssenceSeparatorFacade>(FindObjectsSortMode.None).ToArray();
+            return _separators;
+        }
+
+        /// <summary>A separator travels as a "vat" (its own uid, its loop's units).</summary>
+        public static NetVat ReadSeparator(EssenceSeparatorFacade separator)
+        {
+            var units = new Il2CppUnits();
+            separator.CopyLoopUnits(units);
+            return new NetVat { Uid = separator.Uid, Units = ReadUnits(units) };
+        }
+
         static PourOutHolderFacade FindHolder(int index)
         {
             if (_holders == null || _holders.Any(h => h == null))
@@ -271,6 +289,19 @@ namespace PotionCoop.Game
                         vat.SetLiquidContents(ToIl2Cpp(target.Units));
                         persistence.RecordVat(vat);
                         changed++;
+                    }
+                    foreach (var separator in Separators())
+                    {
+                        var target = vats.FirstOrDefault(v => v.Uid == separator.Uid);
+                        if (target == null || target.Units.SequenceEqual(ReadSeparator(separator).Units))
+                            continue;
+                        try
+                        {
+                            separator.SetLoopUnits(ToIl2Cpp(target.Units));
+                            persistence.RecordSeparator(separator);
+                            changed++;
+                        }
+                        catch (Exception e) { CoopMod.Log.Warning($"separator #{separator.Uid}: {e.Message}"); }
                     }
                 }
             });
@@ -928,6 +959,7 @@ namespace PotionCoop.Game
             Pours.Forget();
             _vats = null;
             _holders = null;
+            _separators = null;
         }
 
         public static void TickDiagnostics()
