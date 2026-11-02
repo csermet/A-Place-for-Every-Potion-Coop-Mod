@@ -215,12 +215,15 @@ namespace PotionCoop.Game
                     work.Add((potion, target, current));
                 }
 
-                // Pass 1: free every slot that a vessel is leaving, so placements never find a stale occupant.
+                // Pass 1: free every slot and holder that a vessel is leaving, so placements never find a stale
+                // occupant (and a holder never keeps claiming a bottle that has gone elsewhere).
                 foreach (var (potion, target, current) in work)
                 {
                     if (current.Location == NetLocation.Slot && !(target.Location == NetLocation.Slot && target.Place == current.Place)
                         && populator.TryGetSlotOf(potion, out var oldSlot) && oldSlot != null)
                         oldSlot.ClearPotion(true);
+                    if (current.Location == NetLocation.Holder && !(target.Location == NetLocation.Holder && target.Place == current.Place))
+                        Unhang(potion);
                 }
 
                 // Pass 2: liquids first (so the placement record below saves them), then placement.
@@ -286,6 +289,22 @@ namespace PotionCoop.Game
                                       (a.Rot == null || b.Rot == null || Quaternion.Angle(ToRotation(a.Rot), ToRotation(b.Rot)) < 5f)),
                 _ => true,
             };
+        }
+
+        /// <summary>Takes a bottle off its holder (the separator's hooks), as picking it up there does.</summary>
+        static void Unhang(PotionFacade potion)
+        {
+            try
+            {
+                var holder = potion.HangingHolder;
+                if (holder != null && holder._vessel != null && holder._vessel.Pointer == potion.Pointer)
+                    holder.Release();
+                if (potion.IsHanging)
+                    potion.EndHang();
+            }
+            catch (Exception e) { CoopMod.Log.Warning($"taking #{potion.Uid} off its holder: {e.Message}"); }
+            if (potion.IsHanging)
+                CoopMod.Log.Warning($"#{potion.Uid} still hangs on its holder");
         }
 
         // ---- corks: held bottles are open, resting ones corked, a finished one sealed with a glow ----

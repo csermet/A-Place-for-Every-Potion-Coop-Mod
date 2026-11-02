@@ -758,11 +758,11 @@ namespace PotionCoop.Game
                     location = other;
                 else if (_scanSlotOf.TryGetValue(uid, out place))
                     location = NetLocation.Slot;
-                else if (potion.IsHanging)
+                else if (potion.IsHanging && potion.HangingHolder != null)
                 {
+                    // Same rule as World.Read, so the digest and the states sent agree.
                     location = NetLocation.Holder;
-                    var holder = potion.HangingHolder;
-                    place = holder != null ? holder.Index : 0;
+                    place = potion.HangingHolder.Index;
                 }
                 else
                     location = NetLocation.Floor;
