@@ -10,20 +10,48 @@ Play **A Place for Every Potion** together: two PCs on the same home network, on
 
 ![The Co-op window](docs/menu.jpg)
 
-## Install (both PCs)
+## Install
 
-1. Install [MelonLoader 0.7.x](https://github.com/LavaGang/MelonLoader/releases) into the game folder and start the game once.
-2. Download the zip from [Releases](https://github.com/csermet/A-Place-for-Every-Potion-Coop-Mod/releases) and copy its `Mods` folder into the game folder.
-3. When Windows asks about network access, allow it for private networks.
+**1. Find the game folder.** On Steam: right-click the game → **Manage** → **Browse local files**. It is the folder with `A Place for Every Potion.exe` in it.
 
-Both PCs need the same game version (tested with 1.2.6) and the same mod version.
+**2. Install MelonLoader** (the mod loader):
+- Download `MelonLoader.Installer.exe` from the [MelonLoader releases](https://github.com/LavaGang/MelonLoader/releases).
+- Run it, select `A Place for Every Potion.exe`, choose version **0.7.3** (or newer 0.7.x) and install.
+- Start the game once. The first start takes a minute or two while MelonLoader sets itself up. Close the game when the main menu appears.
+
+**3. Install the mod:**
+- Download `PotionCoop-x.y.z.zip` from [Releases](https://github.com/csermet/A-Place-for-Every-Potion-Coop-Mod/releases).
+- Unzip it into the game folder, so that you get this:
+
+```
+A Place for Every Potion\
+├── A Place for Every Potion.exe
+├── MelonLoader\
+└── Mods\
+    └── PotionCoop.dll
+```
+
+Or with PowerShell, from the folder where you downloaded the zip:
+
+```powershell
+Expand-Archive .\PotionCoop-0.4.7.zip -DestinationPath "C:\path\to\A Place for Every Potion" -Force
+```
+
+**4. Start the game.** The main menu now has **Co-op**. When Windows asks about network access, allow it for **private networks**.
+
+Your friend installs it the same way. You both need the same game version (tested with 1.2.6) and the same mod version.
 
 ## Play
 
-**Host:** main menu → **Co-op** → **HOST**.
-**Join:** main menu → **Co-op** → **JOIN** next to your friend's game, or type their IP.
+- **Host:** main menu → **Co-op** → **HOST**. You go straight into your lab.
+- **Join:** main menu → **Co-op** → **JOIN** next to your friend's game. If it isn't listed, type the host's IP (shown in their Co-op window) under **Join by IP**.
 
-If the list stays empty, check that both PCs are on the same network with a *Private* profile, or run `PotionCoop_firewall.bat` from the zip as administrator. Logs are in `MelonLoader/Latest.log`.
+**Your friend's game doesn't show up?**
+- Both PCs must be on the same router (not a guest Wi-Fi or a VPN).
+- Windows needs to treat the network as *Private*: **Settings** → **Network & internet** → your connection → **Private network**.
+- Still nothing: copy `PotionCoop_firewall.bat` from the zip into the game folder, right-click it → **Run as administrator**.
+
+Logs are in `MelonLoader\Latest.log`.
 
 ---
 
