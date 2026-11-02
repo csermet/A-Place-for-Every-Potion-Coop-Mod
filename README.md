@@ -1,8 +1,8 @@
-# PotionCoop
+# A Place for Every Potion – Co-op Mod
 
-Two-player LAN co-op for **A Place for Every Potion**: two PCs on the same home network, one shared lab.
+Two-player LAN co-op (multiplayer) for **A Place for Every Potion**: two PCs on the same home network, one shared lab.
 
-An unofficial fan mod for [MelonLoader](https://github.com/LavaGang/MelonLoader). Not affiliated with or endorsed by the game's developers.
+An unofficial fan mod for [MelonLoader](https://github.com/LavaGang/MelonLoader), named PotionCoop inside the game (`PotionCoop.dll`). Not affiliated with or endorsed by the game's developers.
 
 ## What it does
 
