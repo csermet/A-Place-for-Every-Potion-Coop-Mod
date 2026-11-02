@@ -24,6 +24,10 @@ namespace PotionCoop.Game
         // Remote-held vessels are parked frozen far below the floor so nobody can see or aim at them.
         static readonly Vector3 ParkingSpot = new(0f, -60f, 0f);
 
+        // Empty Il2Cpp Nullable<> boxes (hasValue = false) for optional parameters.
+        static readonly Il2CppSystem.Nullable<float> NoDuration = new();
+        static readonly Il2CppSystem.Nullable<Il2CppDG.Tweening.Ease> NoEase = new();
+
         /// <summary>Uids of vessels the other player currently holds (hidden locally).</summary>
         public static readonly HashSet<int> RemoteHeld = new();
 
@@ -323,7 +327,8 @@ namespace PotionCoop.Game
         {
             var root = GameRefs.DropRoot;
             if (root != null)
-                potion.BeginFlyToDrop(root, position, rotation, true);
+                // The optional Nullable<> parameters must be real (empty) boxes: the interop wrapper rejects null.
+                potion.BeginFlyToDrop(root, position, rotation, true, NoDuration, NoEase);
             else
                 potion.transform.SetPositionAndRotation(position, rotation);
         }
