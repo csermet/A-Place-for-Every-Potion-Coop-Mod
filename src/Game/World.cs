@@ -310,6 +310,7 @@ namespace PotionCoop.Game
                             SealIfFinished(potion);
                         else
                             ApplyCork(potion, animate);
+                        FixVisual(potion);
                         moved = true;
                     }
 
@@ -376,6 +377,37 @@ namespace PotionCoop.Game
             };
         }
 
+        /// <summary>
+        /// The drawn liquid level must show the real contents. Our replays of the other player's pours change the
+        /// contents first and reveal the level after, and a reveal can stay undone (e.g. a drain on a bottle the game
+        /// does not see pouring): then a bottle looks full but is empty. Repaints when the two disagree.
+        /// </summary>
+        public static bool FixVisual(PotionFacade potion)
+        {
+            try
+            {
+                var repainter = potion.Repainter();
+                var stacker = repainter != null ? repainter.Stacker() : null;
+                if (stacker == null || Mathf.Abs(repainter.VisibleFill - stacker.FillFraction) < 0.02f)
+                    return false;
+                repainter.RepaintSilently();
+                return true;
+            }
+            catch (Exception) { return false; }
+        }
+
+        /// <summary>Visible level and contents disagree (cheap check for the periodic scan).</summary>
+        public static bool LooksWrong(PotionFacade potion)
+        {
+            try
+            {
+                var repainter = potion.Repainter();
+                var stacker = repainter != null ? repainter.Stacker() : null;
+                return stacker != null && Mathf.Abs(repainter.VisibleFill - stacker.FillFraction) >= 0.02f;
+            }
+            catch (Exception) { return false; }
+        }
+
         /// <summary>Takes a bottle off its holder (the separator's hooks), as picking it up there does.</summary>
         static void Unhang(PotionFacade potion)
         {
@@ -394,10 +426,12 @@ namespace PotionCoop.Game
 
         // ---- corks: held bottles are open, resting ones corked, a finished one sealed with a glow ----
 
+        /// <summary>Cork and visible level follow the bottle's state once it is put down.</summary>
         static void ApplyCork(PotionFacade potion, bool animate)
         {
             try { potion.Corker()?.ApplyCurrentState(!animate); }
             catch (Exception e) { CoopMod.Log.Warning($"cork state for #{potion.Uid}: {e.Message}"); }
+            FixVisual(potion);
         }
 
         /// <summary>The other player picked it up: the cork pops, as in their hands.</summary>

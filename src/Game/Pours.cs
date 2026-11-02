@@ -92,7 +92,11 @@ namespace PotionCoop.Game
                     target.ReceivePour(source, family, units, false);
                     target.RevealPourOver(duration, false);
                     targetPoint = target.transform.position + Vector3.up * 0.12f;
-                    After(duration, () => target.OnReceiveFinished(source));
+                    After(duration, () =>
+                    {
+                        target.OnReceiveFinished(source);
+                        World.FixVisual(target);
+                    });
                     // Drawing from a tap: the bottle goes under the spout for the draw.
                     if (tap != null && tap.Spout != null)
                         World.HoldUnder(target.Uid, tap.Spout.position, duration);
@@ -111,6 +115,9 @@ namespace PotionCoop.Game
                     sourcePotion.RevealDrain(duration, false);
                     if (targetPoint.HasValue)
                         World.TipOver(sourcePotion.Uid, targetPoint.Value, duration);
+                    // The drain's reveal may not run on a bottle the game doesn't see pouring: settle the level after.
+                    var drained = sourcePotion;
+                    After(duration + 0.15f, () => World.FixVisual(drained));
                 }
                 else if (tap != null)
                 {

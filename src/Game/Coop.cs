@@ -54,6 +54,13 @@ namespace PotionCoop.Game
         static bool _initialSyncRequested;
         static float _nextLiquidLog;
 
+        // visible-level safety net (see ScanStep)
+        static bool _visualNetOn = true;
+        static HashSet<int> _visualSuspects = new();
+        static HashSet<int> _visualNext = new();
+        static int _visualChecked;
+        static int _visualFixed;
+
         static Ghost _ghost;
         static float _nextPlayerSend;
         static float _nextPing;
@@ -813,6 +820,20 @@ namespace PotionCoop.Game
                 else
                     location = NetLocation.Floor;
                 _scanAcc[Protocol.BucketOf(uid)] += World.Hash(uid, location, place, potion.Contents._units);
+
+                // Safety net: a resting bottle whose drawn level disagrees with its contents two scans in a row
+                // (seconds apart, so not a pour animation in progress) gets repainted.
+                if (_visualNetOn && location is NetLocation.Floor or NetLocation.Slot or NetLocation.Holder && World.LooksWrong(potion))
+                {
+                    _visualChecked++;
+                    if (_visualSuspects.Contains(uid))
+                    {
+                        if (World.FixVisual(potion))
+                            _visualFixed++;
+                    }
+                    else
+                        _visualNext.Add(uid);
+                }
             }
 
             var frameMs = watch.Elapsed.TotalMilliseconds;
@@ -824,6 +845,19 @@ namespace PotionCoop.Game
 
             _myDigest = _scanAcc;
             _scanIndex = -1;
+
+            // If most bottles "disagree", the two measures don't mean the same thing here: stop checking.
+            if (_visualNetOn && _visualChecked > _scanList.Length / 4)
+            {
+                _visualNetOn = false;
+                CoopMod.Log.Warning($"visual check off: {_visualChecked} of {_scanList.Length} bottles differ (measures not comparable)");
+            }
+            if (_visualFixed > 0)
+                CoopMod.Log.Msg($"repainted {_visualFixed} bottle(s) whose level showed the wrong contents");
+            (_visualSuspects, _visualNext) = (_visualNext, _visualSuspects);
+            _visualNext.Clear();
+            _visualChecked = 0;
+            _visualFixed = 0;
             // Liquid totals in the log now and then (and once per lab), to compare the two players and over time.
             if (Now >= _nextLiquidLog)
             {
@@ -946,6 +980,8 @@ namespace PotionCoop.Game
             _lastHeld.Clear();
             _initialSyncRequested = false;
             _nextLiquidLog = 0f;
+            _visualSuspects.Clear();
+            _visualNext.Clear();
             World.ResetLevel();
             CatSync.Forget();
         }
