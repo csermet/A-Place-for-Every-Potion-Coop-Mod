@@ -23,7 +23,7 @@ namespace PotionCoop
             _verbose = category.CreateEntry("Verbose", false, description: "Gönderilen her değişikliği logla");
         }
 
-        public static string Name => string.IsNullOrWhiteSpace(_name.Value) ? "Oyuncu" : _name.Value.Trim();
+        public static string Name => string.IsNullOrWhiteSpace(_name.Value) ? "Player" : _name.Value.Trim();
         public static string RawName => _name.Value;
 
         public static void SetName(string name)

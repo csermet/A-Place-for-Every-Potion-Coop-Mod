@@ -15,16 +15,17 @@ KURULUM (arkadaşının bilgisayarı)
    Pencereyi kaçırdıysan: "PotionCoop_firewall_izin.bat" dosyasına SAĞ TIK > "Yönetici olarak çalıştır".
    (Yalnızca ev ağından gelen bağlantılara izin verir.)
 
-NASIL OYNANIR?
+NASIL OYNANIR? (oyun İngilizce olduğu için modun menüsü de İngilizce)
 - Host (dünyası kullanılacak kişi):
-  1. Ana menüde CO-OP'a tıkla > HOST OL.
-  2. "Devam et" ile oyuna gir.
-  Panelde senin IP adresin yazar (ör. 192.168.1.20); arkadaşın seni otomatik bulamazsa bunu kullanır.
+  1. Ana menüde Co-op'a tıkla > HOST.
+  2. Pencereyi kapat (X) ve "Continue" ile oyuna gir.
+  Pencerede "Your IP" satırında IP adresin yazar (ör. 192.168.1.20); arkadaşın seni otomatik bulamazsa bunu kullanır.
 - Katılan:
-  1. Ana menüde CO-OP'a tıkla. "Ağdaki oyunlar" listesinde host'u gör > KATIL.
-  2. Bağlanınca "Devam et"e bas. Bu bilgisayarda hiç oynanmadıysa "Yeni Oyun"a bas.
-  3. Oyuna girince host'un dünyası birkaç saniyede yüklenir. Üst panelde "senkron ✓" görünür.
-- Panelde ismini değiştirebilirsin. Oyun içindeyken ESC'ye bas, sağ üstteki CO-OP butonuyla paneli aç.
+  1. Ana menüde Co-op'a tıkla. "Games on your network" listesinde host'u gör > JOIN.
+  2. Bağlanınca pencereyi kapat ve "Continue"a bas. Bu bilgisayarda hiç oynanmadıysa "New Game"e bas.
+  3. Oyuna girince host'un dünyası birkaç saniyede yüklenir. Üstteki durum çubuğunda "in sync ✓" görünür.
+- İsmini Co-op penceresindeki "Your name" kutusuna tıklayıp yazabilirsin (Enter ile bitir).
+- Oyun içindeyken ESC menüsünde de Co-op girişi var (durum, bağlantıyı kesme).
 - Yedek kısayollar (Ctrl ile): F8 host aç/kapat, F9 katıl, F10 yeniden senkron, F11 bağlantıyı kes,
   F12 üst durum çubuğunu gizle, F7 durum bilgisini log'a yaz.
 
@@ -34,11 +35,11 @@ BİLİNEN SINIRLAR
 - Kedi host'un kedisidir; katılan tarafta host'unkini taklit eder.
 
 SORUN GİDERME
-- "Ağdaki oyunlar" boş kalıyorsa:
+- "Games on your network" listesi boş kalıyorsa:
   1. İki bilgisayar aynı modeme/ağa mı bağlı? Biri misafir ağında ya da VPN'de olmasın.
   2. Windows ağ profili "Genel" ise tarama engellenir. Ayarlar > Ağ ve İnternet > (bağlantın) > "Özel ağ" yap.
-  3. Ya da host'un panelindeki IP'yi "IP ile bağlan" kutusuna yazıp BAĞLAN'a bas.
+  3. Ya da host'un Co-op penceresindeki IP'yi "Join by IP" kutusuna yazıp CONNECT'e bas.
   4. Hâlâ olmuyorsa iki bilgisayarda da "PotionCoop_firewall_izin.bat"ı yönetici olarak çalıştır.
-- "reddedildi: sürümler farklı": iki tarafta aynı oyun klasörü kullanılmıyor. Klasörü yeniden kopyala.
+- "turned away: different versions": iki tarafta aynı oyun klasörü kullanılmıyor. Klasörü yeniden kopyala.
 - Log dosyası: MelonLoader\Latest.log (sorun olursa bu dosyayı gönder).
 - Modu kaldırmak: version.dll dosyasını ve MelonLoader, Mods, Plugins, UserData, UserLibs klasörlerini sil.

@@ -108,7 +108,10 @@ namespace PotionCoop.Net
                 }
             }
             catch (Exception) { }
-            return result.OrderByDescending(r => r.gateway).Select(r => r.ip).Distinct().ToList();
+            // Adapters without a gateway are usually virtual (WSL, Hyper-V, VPN): show them only if nothing else exists.
+            if (result.Any(r => r.gateway))
+                result.RemoveAll(r => !r.gateway);
+            return result.Select(r => r.ip).Distinct().ToList();
         }
 
         static bool IsPrivate(IPAddress address)

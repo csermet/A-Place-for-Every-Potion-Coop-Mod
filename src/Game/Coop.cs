@@ -60,7 +60,8 @@ namespace PotionCoop.Game
         public static bool IsHost => _session != null && _session.IsHost;
         public static bool IsConnected => _session != null && _session.IsConnected && _ready;
         public static bool IsRunning => _session != null;
-        public static string Status { get; private set; } = "kapalı";
+        public const string StatusOff = "off";
+        public static string Status { get; private set; } = StatusOff;
         public static string RemoteName => _remoteName;
         public static double PingMs { get; private set; } = -1;
         /// <summary>Client: the host's vat capacities (they follow the host's skills, see <see cref="VatCapacityPatch"/>).</summary>
@@ -80,12 +81,12 @@ namespace PotionCoop.Game
             {
                 _session = TcpSession.Host(Settings.Port);
                 _responder = new DiscoveryResponder(Settings.DiscoveryPort, Settings.Port, Settings.Name);
-                Status = $"host: bekleniyor (port {Settings.Port})";
+                Status = $"hosting, waiting for a player (port {Settings.Port})";
                 CoopMod.Log.Msg($"hosting on TCP {Settings.Port}, discovery UDP {Settings.DiscoveryPort}");
             }
             catch (Exception e)
             {
-                Status = $"host başlatılamadı: {e.Message}";
+                Status = $"could not start hosting: {e.Message}";
                 CoopMod.Log.Error(Status);
                 Stop();
             }
@@ -93,9 +94,9 @@ namespace PotionCoop.Game
 
         /// <summary>Joining is done from the main menu, so the shared world is loaded into the co-op save folder.</summary>
         public static string JoinBlocker =>
-            IsRunning && IsHost ? "zaten host'sun (önce host'u kapat)"
+            IsRunning && IsHost ? "you are hosting (stop hosting first)"
             : !SavePaths.Active && GameRefs.State is not (eGameState.Lobby or eGameState.LoadLobby or eGameState.None)
-                ? "katılmak için ana menüye dön"
+                ? "go back to the main menu to join"
                 : null;
 
         /// <summary>Join a known host, or (no address) the configured HostAddress, or whoever answers on the LAN.</summary>
@@ -113,7 +114,7 @@ namespace PotionCoop.Game
                 Connect(address, port > 0 ? port : Settings.Port);
                 return;
             }
-            Status = "host aranıyor...";
+            Status = "looking for a host…";
             var configured = Settings.HostAddress;
             Task.Run(() =>
             {
@@ -123,7 +124,7 @@ namespace PotionCoop.Game
                     found = parsed;
                 else if (!DiscoveryResponder.TryFind(Settings.DiscoveryPort, TimeSpan.FromSeconds(4), out found, out foundPort, out _))
                 {
-                    MainThread.Post(() => Status = "host bulunamadı: host'un ekranındaki IP'yi elle yaz");
+                    MainThread.Post(() => Status = "no host found: type the IP shown on the host's screen");
                     return;
                 }
                 MainThread.Post(() => Connect(found, foundPort));
@@ -132,7 +133,7 @@ namespace PotionCoop.Game
 
         static void Connect(IPAddress address, int port)
         {
-            Status = $"{address} adresine bağlanılıyor...";
+            Status = $"connecting to {address}…";
             _session = TcpSession.Join(address, port);
         }
 
@@ -152,7 +153,7 @@ namespace PotionCoop.Game
             _responder?.Dispose();
             _responder = null;
             ResetLink();
-            Status = "kapalı";
+            Status = StatusOff;
         }
 
         static void ResetLink()
@@ -246,23 +247,23 @@ namespace PotionCoop.Game
             if (frame == "\u0000connected")
             {
                 _remoteName = "";
-                Status = IsHost ? "oyuncu bağlandı, el sıkışılıyor..." : "bağlandı, el sıkışılıyor...";
+                Status = IsHost ? "a player connected, saying hello…" : "connected, saying hello…";
                 if (!IsHost)
                     _session.Send(new HelloMsg { Mod = Protocol.ModVersion, Game = Application.version, Name = Settings.Name });
                 return;
             }
             if (frame == TcpSession.Disconnected)
             {
-                var who = string.IsNullOrEmpty(_remoteName) ? "oyuncu" : _remoteName;
+                var who = string.IsNullOrEmpty(_remoteName) ? "the other player" : _remoteName;
                 if (GameRefs.InLevel && _ghost != null)
                     World.DropRemoteHeld(_ghost.Position);
                 var wasReady = _ready;
                 ResetLink();
                 if (IsHost)
-                    Status = wasReady ? $"{who} ayrıldı; host bekliyor" : $"host: bekleniyor (port {Settings.Port})";
+                    Status = wasReady ? $"{who} left; waiting for a player" : $"hosting, waiting for a player (port {Settings.Port})";
                 else
                 {
-                    Status = wasReady ? "bağlantı koptu (Ctrl+F9 ile tekrar bağlan)" : "bağlanılamadı (IP/port/güvenlik duvarı?)";
+                    Status = wasReady ? "connection lost (join again from Co-op)" : "could not connect (IP, port or firewall?)";
                     _session?.Dispose();
                     _session = null;
                 }
@@ -286,16 +287,16 @@ namespace PotionCoop.Game
                     {
                         _session.Send(new RejectMsg
                         {
-                            Reason = $"sürümler farklı (sende mod {hello.Mod}, oyun {hello.Game}; host'ta mod {Protocol.ModVersion}, oyun {Application.version}). " +
-                                     "İki tarafta aynı oyun klasörünü kullanın.",
+                            Reason = $"different versions (you: mod {hello.Mod}, game {hello.Game}; host: mod {Protocol.ModVersion}, game {Application.version}). " +
+                                     "Use the same game folder on both PCs.",
                         });
-                        Status = $"{hello.Name} reddedildi: sürüm uyuşmuyor";
+                        Status = $"{hello.Name} turned away: different versions";
                         return;
                     }
                     _remoteName = hello.Name;
                     _ready = true;
                     _session.Send(new WelcomeMsg { Name = Settings.Name });
-                    Status = $"{_remoteName} bağlandı";
+                    Status = $"{_remoteName} joined";
                     CoopMod.Log.Msg($"{_remoteName} joined from {_session.RemoteAddress}");
                     return;
 
@@ -304,13 +305,13 @@ namespace PotionCoop.Game
                     _ready = true;
                     SavePaths.Activate();
                     Status = SavePaths.HasStartedGame()
-                        ? $"{_remoteName} ile bağlı: Devam et'e bas"
-                        : $"{_remoteName} ile bağlı: bu PC'de kayıt yok, Yeni Oyun'a bas";
+                        ? $"connected to {_remoteName}: press Continue"
+                        : $"connected to {_remoteName}: no save on this PC yet, press New Game";
                     CoopMod.Log.Msg($"joined {_remoteName}'s world");
                     return;
 
                 case "reject":
-                    Status = "reddedildi: " + msg.body.ToObject<RejectMsg>().Reason;
+                    Status = "turned away: " + msg.body.ToObject<RejectMsg>().Reason;
                     CoopMod.Log.Warning(Status);
                     _session?.Dispose();
                     _session = null;

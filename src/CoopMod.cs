@@ -35,6 +35,7 @@ namespace PotionCoop
                 Coop.Update();
                 MenuButton.Tick();
                 CoopPanel.Tick();
+                UiDump.Tick();
             }
             catch (Exception e) { Log.Error($"update: {e}"); }
         }
@@ -81,12 +82,11 @@ namespace PotionCoop
 
             Guarded("status bar", () =>
             {
-                if (_showStatusBar && (Coop.IsRunning || GameRefs.State == Il2Cpp.eGameState.Lobby))
+                // In the menus the co-op window shows the same; the bar is for the lab.
+                if (_showStatusBar && Coop.IsRunning && !CoopPanel.IsOpen)
                     DrawStatusBar();
             });
             Guarded("name label", DrawGhostLabel);
-            Guarded("pause button", () => CoopPanel.DrawPauseButton(UiScale));
-            Guarded("co-op window", () => CoopPanel.Draw(UiScale));
         }
 
         static readonly System.Collections.Generic.HashSet<string> ReportedGuiErrors = new();
@@ -104,15 +104,15 @@ namespace PotionCoop
 
         static void DrawStatusBar()
         {
-            var role = !Coop.IsRunning ? "" : Coop.IsHost ? "HOST · " : "KATILIMCI · ";
-            var text = Coop.IsRunning ? $"PotionCoop  {role}{Coop.Status}" : "PotionCoop: birlikte oynamak için menüde CO-OP'a tıkla";
+            var role = Coop.IsHost ? "HOST · " : "GUEST · ";
+            var text = $"PotionCoop  {role}{Coop.Status}";
             if (Coop.IsConnected)
             {
                 text += Coop.PingMs >= 0 ? $"  ·  ping {Coop.PingMs:F0} ms" : "";
                 text += Coop.InSync switch
                 {
-                    true => "  ·  senkron ✓",
-                    false => "  ·  senkronlanıyor…",
+                    true => "  ·  in sync ✓",
+                    false => "  ·  syncing…",
                     _ => "",
                 };
             }
@@ -150,7 +150,7 @@ namespace PotionCoop
 
             var label = ghost.Name;
             if (ghost.InMenu)
-                label += "  (menüde)";
+                label += "  (in menu)";
             var w = 320 * UiScale;
             var h = 34 * UiScale;
             var rect = new Rect(screen.x - w / 2f, Screen.height - screen.y - h / 2f, w, h);

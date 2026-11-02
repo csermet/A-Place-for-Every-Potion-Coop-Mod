@@ -143,14 +143,25 @@ namespace PotionCoop
         }
     }
 
-    /// <summary>Our Co-op entry in the main menu is a copy of the Settings entry: its press opens the co-op window.</summary>
+    /// <summary>
+    /// Our Co-op entry in the main menu is a copy of the Settings entry: its press opens the co-op window.
+    /// A prefix, so the window opens even if one of the game's button modules (sounds…) fails afterwards.
+    /// </summary>
     [HarmonyPatch(typeof(Il2CppCodeBase.Components.UI.BaseButton), nameof(Il2CppCodeBase.Components.UI.BaseButton.UpImpl))]
     static class MenuButtonClickPatch
     {
-        static void Postfix(Il2CppCodeBase.Components.UI.BaseButton __instance)
+        static void Prefix(Il2CppCodeBase.Components.UI.BaseButton __instance)
         {
-            if (__instance != null && __instance.gameObject.name == UI.MenuButton.ObjectName)
-                UI.CoopPanel.Toggle();
+            try
+            {
+                if (__instance == null)
+                    return;
+                if (__instance.gameObject.name == UI.MenuButton.ObjectName)
+                    MainThread.Post(UI.CoopPanel.Toggle);
+                else
+                    UI.UiClone.TryClick(__instance);
+            }
+            catch (System.Exception e) { CoopMod.Log.Error($"co-op click: {e}"); }
         }
     }
 
