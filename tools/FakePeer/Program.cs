@@ -1,7 +1,6 @@
 // FakePeer: a scripted stand-in for the second player, for testing the host side of PotionCoop on one PC.
 // Usage: dotnet run -- [host=127.0.0.1] [port=47777] [gameVersion=1.2.6]
-// It joins, orbits the host's position as a ghost, then borrows the floor bottle nearest the host:
-// takes it (hidden on the host), drops it at the host's feet, and puts it back where it was.
+// It joins, orbits the host's position as a ghost, and keeps picking up and dropping one bottle at its own feet.
 
 using System.Net.Sockets;
 using System.Text;
@@ -115,8 +114,10 @@ _ = Task.Run(async () =>
     }
 });
 
-var phase = 0;
-var phaseAt = 12.0;
+// Carry loop: grab the floor bottle nearest the ghost, then every 1.5 s alternately drop it at the
+// ghost's feet and pick it up again, so it visibly follows the ghost around its circle.
+var nextAction = 6.0;
+var holding = false;
 while (true)
 {
     Thread.Sleep(50);
@@ -124,53 +125,36 @@ while (true)
         continue;
 
     var t = clock.Elapsed.TotalSeconds;
-    var angle = (float)(t * 0.6);
+    var angle = (float)(t * 0.4);
     var x = hx + 2.5f * MathF.Cos(angle);
     var z = hz + 2.5f * MathF.Sin(angle);
     // Face the host while circling.
     var yaw = MathF.Atan2(hx - x, hz - z) * 180f / MathF.PI;
-    Send(new { T = "p", Pos = new[] { x, hy, z }, Yaw = yaw, Pitch = 10f, InMenu = false, Held = phase == 1 ? 1 : 0 });
+    Send(new { T = "p", Pos = new[] { x, hy, z }, Yaw = yaw, Pitch = 10f, InMenu = false, Held = holding ? 1 : 0 });
 
-    if (t < phaseAt)
+    if (t < nextAction)
         continue;
+    nextAction = t + 1.5;
+
     if (borrowed == null)
     {
-        // The floor bottle closest to a point 1.5 m in front of the host, so they see it go.
-        var (fx, fz) = (MathF.Sin(hyaw * MathF.PI / 180f), MathF.Cos(hyaw * MathF.PI / 180f));
-        float ax = hx + fx * 1.5f, az = hz + fz * 1.5f;
         lock (floor)
             borrowed = floor.OrderBy(v =>
             {
                 var q = v["p"].AsArray();
-                float dx = (float)q[0] - ax, dz = (float)q[2] - az;
+                float dx = (float)q[0] - x, dz = (float)q[2] - z;
                 return dx * dx + dz * dz;
             }).FirstOrDefault();
         if (borrowed == null)
             continue;
+        Log($"carrying #{borrowed["u"]} around");
     }
 
     var uid = (int)borrowed["u"];
     var units = borrowed["n"];
-    switch (phase)
-    {
-        case 0:
-            Log($"taking #{uid}, the floor bottle in front of the host (should vanish)");
-            Send(new { T = "s", Potions = new[] { new { u = uid, l = 11, s = 0, n = units } }, Vats = Array.Empty<object>() });
-            break;
-        case 1:
-            Log($"dropping #{uid} 1 m in front of the host");
-            var (gx, gz) = (MathF.Sin(hyaw * MathF.PI / 180f), MathF.Cos(hyaw * MathF.PI / 180f));
-            Send(new { T = "s", Potions = new[] { new { u = uid, l = 0, s = 0, p = new[] { hx + gx, hy + 0.15f, hz + gz }, r = new[] { 0f, 0f, 0.7071f, 0.7071f }, n = units } }, Vats = Array.Empty<object>() });
-            break;
-        case 2:
-            Log($"putting #{uid} back where it was");
-            Send(new { T = "s", Potions = new[] { new { u = uid, l = 0, s = 0, p = borrowed["p"].DeepClone(), r = borrowed["r"].DeepClone(), n = units } }, Vats = Array.Empty<object>() });
-            break;
-        case 3:
-            Log("done; still orbiting (Ctrl+C to quit)");
-            break;
-    }
-    phase++;
-    phaseAt = t + 6;
-    if (phase > 3) phaseAt = double.MaxValue;
+    if (!holding)
+        Send(new { T = "s", Potions = new[] { new { u = uid, l = 11, s = 0, n = units } }, Vats = Array.Empty<object>() });
+    else
+        Send(new { T = "s", Potions = new[] { new { u = uid, l = 0, s = 0, p = new[] { x, hy + 0.1f, z }, r = new[] { 0f, 0f, 0.7071f, 0.7071f }, n = units } }, Vats = Array.Empty<object>() });
+    holding = !holding;
 }

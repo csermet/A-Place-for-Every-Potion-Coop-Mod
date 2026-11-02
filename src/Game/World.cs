@@ -104,10 +104,23 @@ namespace PotionCoop.Game
 
         public static NetVat ReadVat(VatFacade vat) => new() { Uid = vat.Uid, Units = ReadUnits(vat.Contents._units) };
 
-        public static VatFacade[] Vats() => Object.FindObjectsByType<VatFacade>(FindObjectsSortMode.None).ToArray();
+        // Searching the scene (240k+ objects) is slow, so vats and holders are looked up once per level.
+        static VatFacade[] _vats;
+        static PourOutHolderFacade[] _holders;
 
-        static PourOutHolderFacade FindHolder(int index) =>
-            Object.FindObjectsByType<PourOutHolderFacade>(FindObjectsSortMode.None).FirstOrDefault(h => h.Index == index);
+        public static VatFacade[] Vats()
+        {
+            if (_vats == null || _vats.Any(v => v == null))
+                _vats = Object.FindObjectsByType<VatFacade>(FindObjectsSortMode.None).ToArray();
+            return _vats;
+        }
+
+        static PourOutHolderFacade FindHolder(int index)
+        {
+            if (_holders == null || _holders.Any(h => h == null))
+                _holders = Object.FindObjectsByType<PourOutHolderFacade>(FindObjectsSortMode.None).ToArray();
+            return _holders.FirstOrDefault(h => h.Index == index);
+        }
 
         /// <summary>Order-independent hash of what matters for sync (floor poses excluded: they are cosmetic).</summary>
         public static uint Hash(NetPotion s)
@@ -410,6 +423,8 @@ namespace PotionCoop.Game
             RemoteHeld.Clear();
             Hidden.Clear();
             Checks.Clear();
+            _vats = null;
+            _holders = null;
         }
 
         public static void TickDiagnostics()
