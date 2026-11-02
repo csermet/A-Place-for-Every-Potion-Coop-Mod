@@ -7,11 +7,9 @@ NE YAPAR?
 - XP ve yetenekler (skill) herkesin kendisinindir. Katılan kişinin kendi tek kişilik kaydı bozulmaz.
 
 KURULUM (arkadaşının bilgisayarı)
-1. Oyun zaten kuruluysa (aynı sürüm): "PotionCoop_mod" paketinin İÇİNDEKİLERİ (MelonLoader, Mods, Plugins,
-   UserLibs, version.dll ve iki dosya) oyun klasörüne, "A Place for Every Potion.exe" ile yan yana kopyala;
-   soru sorarsa üzerine yaz.
-   Oyun kurulu değilse: host'un oyun klasörünün TAMAMINI kopyala.
-   İki tarafta oyun ve mod sürümü birebir aynı olmalı.
+1. "PotionCoop_mod" paketinin İÇİNDEKİLERİNİ (MelonLoader, Mods, Plugins, UserLibs, version.dll ve iki dosya)
+   oyun klasörüne, "A Place for Every Potion.exe" ile yan yana kopyala; soru sorarsa üzerine yaz.
+   İki bilgisayarda da oyunun ve modun aynı sürümü kurulu olmalı.
 2. Oyunu bir kez aç. İlk açılışta MelonLoader kendini hazırlar (birkaç dakika sürebilir, pencere geç
    açılabilir), gerekirse .NET 6 çalışma zamanını kendisi indirip kurar. Bekle.
 3. Windows "erişime izin ver" diye sorarsa "Özel ağlar" işaretliyken İZİN VER de.
@@ -44,6 +42,6 @@ SORUN GİDERME
   2. Windows ağ profili "Genel" ise tarama engellenir. Ayarlar > Ağ ve İnternet > (bağlantın) > "Özel ağ" yap.
   3. Ya da host'un Co-op penceresindeki IP'yi "Join by IP" kutusuna yazıp CONNECT'e bas.
   4. Hâlâ olmuyorsa iki bilgisayarda da "PotionCoop_firewall_izin.bat"ı yönetici olarak çalıştır.
-- "turned away: different versions": iki tarafta aynı oyun klasörü kullanılmıyor. Klasörü yeniden kopyala.
+- "turned away: different versions": iki tarafta oyunun ya da modun sürümü farklı. İkisini de aynı sürüme güncelle.
 - Log dosyası: MelonLoader\Latest.log (sorun olursa bu dosyayı gönder).
 - Modu kaldırmak: version.dll dosyasını ve MelonLoader, Mods, Plugins, UserData, UserLibs klasörlerini sil.

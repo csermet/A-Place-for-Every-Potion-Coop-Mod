@@ -17,15 +17,15 @@ namespace PotionCoop
         public static void Init()
         {
             var category = MelonPreferences.CreateCategory("PotionCoop");
-            _name = category.CreateEntry("Name", Environment.UserName, description: "Diğer oyuncunun göreceği isim");
-            _port = category.CreateEntry("Port", 47777, description: "TCP portu (keşif için Port+1 UDP kullanılır)");
-            _hostAddress = category.CreateEntry("HostAddress", "", description: "Boşsa host ağda otomatik aranır; bulunamazsa host'un IP'sini yaz (ör. 192.168.1.20)");
-            _verbose = category.CreateEntry("Verbose", false, description: "Gönderilen her değişikliği logla");
-            _hostId = category.CreateEntry("HostId", "", description: "Bu kurulumun kimliği (katılanlar profillerini buna göre ayırır); değiştirme");
-            _machine = category.CreateEntry("Machine", "", description: "Bu ayarların ait olduğu bilgisayar (klasör kopyalanınca isim ve kimlik yenilenir)");
+            _name = category.CreateEntry("Name", Environment.UserName, description: "The name the other player sees");
+            _port = category.CreateEntry("Port", 47777, description: "TCP port (LAN discovery uses Port+1 over UDP)");
+            _hostAddress = category.CreateEntry("HostAddress", "", description: "Empty: find the host on the network; otherwise the host's IP (e.g. 192.168.1.20)");
+            _verbose = category.CreateEntry("Verbose", false, description: "Log every change sent");
+            _hostId = category.CreateEntry("HostId", "", description: "This install's id (guests keep one profile per host); don't change it");
+            _machine = category.CreateEntry("Machine", "", description: "The computer these settings belong to (settings from another computer get a new name and id)");
 
-            // The game folder is copied to the friend's PC with these settings in it: a different computer gets
-            // its own id and starts with its own Windows user name instead of ours.
+            // Settings that came along from another computer (a copied game folder): this computer gets its own id
+            // and starts with its own Windows user name.
             var machine = Environment.MachineName;
             var copied = !string.IsNullOrEmpty(_machine.Value) && _machine.Value != machine;
             if (copied || string.IsNullOrWhiteSpace(_name.Value))

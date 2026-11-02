@@ -514,7 +514,7 @@ namespace PotionCoop.Game
                         _session.Send(new RejectMsg
                         {
                             Reason = $"different versions (you: mod {hello.Mod}, game {hello.Game}; host: mod {Protocol.ModVersion}, game {Application.version}). " +
-                                     "Use the same game folder on both PCs.",
+                                     "Update both PCs to the same game and mod version.",
                         });
                         Status = $"{hello.Name} turned away: different versions";
                         return;

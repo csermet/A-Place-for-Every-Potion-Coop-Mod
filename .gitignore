@@ -3,3 +3,4 @@ obj/
 *.user
 .vs/
 dist-next/
+release/*.zip
