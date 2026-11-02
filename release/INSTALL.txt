@@ -1,0 +1,21 @@
+A Place for Every Potion - Co-op Mod (PotionCoop) 0.4.7
+=======================================================
+
+Two-player LAN co-op: two PCs on the same home network, one shared lab.
+Both players need the game (same version) and this mod (same version).
+
+INSTALL (on both PCs)
+1. Install MelonLoader 0.7.x into the game folder with its installer:
+   https://github.com/LavaGang/MelonLoader/releases
+   Start the game once and wait until MelonLoader has finished its first-run setup.
+2. Copy the "Mods" folder from this zip into the game folder (next to "A Place for Every Potion.exe").
+3. When Windows asks whether to allow network access, allow it for private networks.
+   If you missed it: copy PotionCoop_firewall.bat into the game folder and run it as administrator.
+
+PLAY
+- Host: main menu > Co-op > HOST. You go straight into your lab.
+- Join: main menu > Co-op > your friend's game under "Games on your network" > JOIN
+  (or type the host's IP under "Join by IP").
+- The first time you join a host you choose START FRESH or COPY LEVEL. Your own solo save is never touched.
+
+More: https://github.com/csermet/A-Place-for-Every-Potion-Coop-Mod
