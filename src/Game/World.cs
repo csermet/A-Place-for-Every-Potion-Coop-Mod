@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Il2Cpp;
@@ -21,9 +22,6 @@ namespace PotionCoop.Game
     /// </summary>
     internal static class World
     {
-        // Remote-held vessels are parked frozen far below the floor so nobody can see or aim at them.
-        static readonly Vector3 ParkingSpot = new(0f, -60f, 0f);
-
         // Empty Il2Cpp Nullable<> boxes (hasValue = false) for optional parameters.
         static readonly Il2CppSystem.Nullable<float> NoDuration = new();
         static readonly Il2CppSystem.Nullable<Il2CppDG.Tweening.Ease> NoEase = new();
@@ -262,6 +260,7 @@ namespace PotionCoop.Game
             {
                 Park(potion);
                 RemoteHeld.Add(uid);
+                Diagnose(potion, "hidden");
                 // Host: keep the save sane if the game closes now (the stray rescuer returns lost bottles on load).
                 if (Coop.IsHost)
                     persistence.RecordDropped(potion);
@@ -284,6 +283,7 @@ namespace PotionCoop.Game
                     if (potion.transform.parent != slot.PotionMount)
                         potion.BeginFlyToSlot(slot.PotionMount, true);
                     persistence.RecordShelved(potion, slot);
+                    Diagnose(potion, $"shelved in #{slot.Uid}");
                     break;
 
                 case NetLocation.Holder:
@@ -314,30 +314,122 @@ namespace PotionCoop.Game
             }
         }
 
+        // ---- hiding remote-held vessels ----
+        // A vessel in the other player's hands stays where it was, frozen, with its renderers and colliders off:
+        // invisible, impossible to aim at, and nothing in the game thinks it fell out of the world.
+
+        static readonly Dictionary<int, List<Component>> Hidden = new();
+
         static void Park(PotionFacade potion)
         {
-            if (RemoteHeld.Contains(potion.Uid))
+            var uid = potion.Uid;
+            if (Hidden.ContainsKey(uid))
                 return;
-            DropAt(potion, ParkingSpot, Quaternion.identity);
             potion.Freeze();
-        }
-
-        /// <summary>Puts a vessel on the floor the way the game's own drop does (same parent), instantly.</summary>
-        static void DropAt(PotionFacade potion, Vector3 position, Quaternion rotation)
-        {
-            var root = GameRefs.DropRoot;
-            if (root != null)
-                // The optional Nullable<> parameters must be real (empty) boxes: the interop wrapper rejects null.
-                potion.BeginFlyToDrop(root, position, rotation, true, NoDuration, NoEase);
-            else
-                potion.transform.SetPositionAndRotation(position, rotation);
+            var switched = new List<Component>();
+            foreach (var renderer in potion.GetComponentsInChildren<Renderer>(false))
+                if (renderer.enabled)
+                {
+                    renderer.enabled = false;
+                    switched.Add(renderer);
+                }
+            foreach (var collider in potion.GetComponentsInChildren<Collider>(false))
+                if (collider.enabled)
+                {
+                    collider.enabled = false;
+                    switched.Add(collider);
+                }
+            Hidden[uid] = switched;
         }
 
         static void Unpark(PotionFacade potion)
         {
-            if (!RemoteHeld.Remove(potion.Uid))
+            var uid = potion.Uid;
+            RemoteHeld.Remove(uid);
+            if (!Hidden.Remove(uid, out var switched))
                 return;
-            potion.Unfreeze();
+            foreach (var component in switched)
+            {
+                if (component == null)
+                    continue;
+                var renderer = component.TryCast<Renderer>();
+                if (renderer != null)
+                    renderer.enabled = true;
+                var collider = component.TryCast<Collider>();
+                if (collider != null)
+                    collider.enabled = true;
+            }
+        }
+
+        /// <summary>Puts a vessel on the floor at an exact resting pose.</summary>
+        static void DropAt(PotionFacade potion, Vector3 position, Quaternion rotation)
+        {
+            var root = GameRefs.DropRoot;
+            var path = "fly";
+            if (root != null)
+            {
+                // The optional Nullable<> parameters must be real (empty) boxes: the interop wrapper rejects null.
+                try { potion.BeginFlyToDrop(root, position, rotation, true, NoDuration, NoEase); }
+                catch (Exception e) { path = "fly failed (" + e.GetType().Name + ")"; }
+            }
+
+            // The game's drop only works for bottles coming out of a hand; anything else we place ourselves.
+            if ((potion.transform.position - position).sqrMagnitude > 0.01f)
+            {
+                path += " -> teleport";
+                var transform = potion.transform;
+                if (root != null)
+                    transform.SetParent(root, true);
+                transform.SetPositionAndRotation(position, rotation);
+                var carrier = potion._carrier;
+                if (carrier != null)
+                    carrier.MarkIdle();
+                // Resting floor bottles are frozen until something disturbs them.
+                potion.Freeze();
+            }
+            Diagnose(potion, path);
+        }
+
+        // ---- diagnostics: what really happened to the first applied vessels ----
+
+        static int _diagnosed;
+        static readonly List<(PotionFacade potion, float due, string label)> Checks = new();
+
+        static void Diagnose(PotionFacade potion, string label)
+        {
+            if (_diagnosed >= 20 && !Settings.Verbose)
+                return;
+            _diagnosed++;
+            CoopMod.Log.Msg($"[diag] #{potion.Uid} {label}: now {Describe(potion)}");
+            Checks.Add((potion, Time.realtimeSinceStartup + 1f, label));
+        }
+
+        /// <summary>Level unloaded: every vessel object is gone, forget what we knew about them.</summary>
+        public static void ResetLevel()
+        {
+            RemoteHeld.Clear();
+            Hidden.Clear();
+            Checks.Clear();
+        }
+
+        public static void TickDiagnostics()
+        {
+            for (var i = Checks.Count - 1; i >= 0; i--)
+            {
+                var (potion, due, label) = Checks[i];
+                if (Time.realtimeSinceStartup < due)
+                    continue;
+                Checks.RemoveAt(i);
+                if (potion != null)
+                    CoopMod.Log.Msg($"[diag] #{potion.Uid} {label}: 1s later {Describe(potion)}");
+            }
+        }
+
+        static string Describe(PotionFacade potion)
+        {
+            var t = potion.transform;
+            var parent = t.parent != null ? t.parent.name : "-";
+            return $"pos={t.position} carry={potion.CarryState.Value} parent={parent} hidden={Hidden.ContainsKey(potion.Uid)}";
         }
 
         /// <summary>The other player left: put whatever they held down where their ghost stood.</summary>

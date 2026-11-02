@@ -184,6 +184,7 @@ namespace PotionCoop.Game
 
                 ScanStep();
                 _ghost?.Tick(Time.unscaledDeltaTime);
+                World.TickDiagnostics();
             }
             else if (_ghost != null && !GameRefs.InLevel)
             {
@@ -577,7 +578,7 @@ namespace PotionCoop.Game
             _scanUids = null;
             _lastHeld.Clear();
             _initialSyncRequested = false;
-            World.RemoteHeld.Clear();
+            World.ResetLevel();
         }
     }
 }

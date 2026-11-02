@@ -43,7 +43,7 @@ void Log(string s) => Console.WriteLine($"[{clock.Elapsed.TotalSeconds,6:F1}s] {
 
 Send(new { T = "hello", Mod = ModVersion, Game = gameVersion, Name = "Bot" });
 
-float hx = 0, hy = 0, hz = 0;
+float hx = 0, hy = 0, hz = 0, hyaw = 0;
 bool haveHostPos = false;
 JsonNode borrowed = null; // original state of the bottle we play with
 var floor = new List<JsonNode>(); // floor vessels with positions, to pick one next to the host
@@ -71,6 +71,7 @@ var reader = new Thread(() =>
                 case "p":
                     var p = msg["Pos"].AsArray();
                     (hx, hy, hz) = ((float)p[0], (float)p[1], (float)p[2]);
+                    hyaw = (float)msg["Yaw"];
                     haveHostPos = true;
                     break;
                 case "ping":
@@ -134,11 +135,14 @@ while (true)
         continue;
     if (borrowed == null)
     {
+        // The floor bottle closest to a point 1.5 m in front of the host, so they see it go.
+        var (fx, fz) = (MathF.Sin(hyaw * MathF.PI / 180f), MathF.Cos(hyaw * MathF.PI / 180f));
+        float ax = hx + fx * 1.5f, az = hz + fz * 1.5f;
         lock (floor)
             borrowed = floor.OrderBy(v =>
             {
                 var q = v["p"].AsArray();
-                float dx = (float)q[0] - hx, dz = (float)q[2] - hz;
+                float dx = (float)q[0] - ax, dz = (float)q[2] - az;
                 return dx * dx + dz * dz;
             }).FirstOrDefault();
         if (borrowed == null)
@@ -150,12 +154,13 @@ while (true)
     switch (phase)
     {
         case 0:
-            Log($"taking #{uid}, the floor bottle nearest to the host (should vanish)");
+            Log($"taking #{uid}, the floor bottle in front of the host (should vanish)");
             Send(new { T = "s", Potions = new[] { new { u = uid, l = 11, s = 0, n = units } }, Vats = Array.Empty<object>() });
             break;
         case 1:
-            Log($"dropping #{uid} at the host's feet");
-            Send(new { T = "s", Potions = new[] { new { u = uid, l = 0, s = 0, p = new[] { hx + 0.6f, hy + 0.4f, hz }, r = new[] { 0f, 0f, 0f, 1f }, n = units } }, Vats = Array.Empty<object>() });
+            Log($"dropping #{uid} 1 m in front of the host");
+            var (gx, gz) = (MathF.Sin(hyaw * MathF.PI / 180f), MathF.Cos(hyaw * MathF.PI / 180f));
+            Send(new { T = "s", Potions = new[] { new { u = uid, l = 0, s = 0, p = new[] { hx + gx, hy + 0.15f, hz + gz }, r = new[] { 0f, 0f, 0.7071f, 0.7071f }, n = units } }, Vats = Array.Empty<object>() });
             break;
         case 2:
             Log($"putting #{uid} back where it was");
