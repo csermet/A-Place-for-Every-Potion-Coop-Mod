@@ -35,6 +35,8 @@ namespace PotionCoop.UI
         static bool _openedOnStart;
         static readonly bool PauseInLab = Array.IndexOf(Environment.GetCommandLineArgs(), "--coop-pause") >= 0;
         static float _pauseAt = -1f;
+        static readonly bool LiquidInLab = Array.IndexOf(Environment.GetCommandLineArgs(), "--coop-liquid") >= 0;
+        static float _liquidAt = -1f;
 
         public static void Tick()
         {
@@ -43,6 +45,17 @@ namespace PotionCoop.UI
             {
                 _openedOnStart = true;
                 CoopPanel.Show();
+            }
+            // --coop-liquid: the lab's liquid totals in the log once it is loaded (also offline, for a reference count).
+            if (LiquidInLab && GameRefs.State == eGameState.Playing && GameRefs.Populator != null)
+            {
+                if (_liquidAt < 0f)
+                    _liquidAt = Time.realtimeSinceStartup + 6f;
+                else if (Time.realtimeSinceStartup >= _liquidAt && _liquidAt < float.MaxValue)
+                {
+                    _liquidAt = float.MaxValue;
+                    CoopMod.Log.Msg($"[liquid] {World.LiquidReport(GameRefs.Populator)}");
+                }
             }
             // --coop-pause: pause a few seconds after entering the lab (to look at the pause menu without a keyboard).
             if (PauseInLab && GameRefs.State == eGameState.Playing)

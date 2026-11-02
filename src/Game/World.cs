@@ -67,20 +67,73 @@ namespace PotionCoop.Game
                 into.Add(list[i].Uid);
         }
 
+        /// <summary>
+        /// Every unit of liquid in the lab (bottles, vats, separator loop), per family. Liquid is only ever moved,
+        /// never made or destroyed, so in one lab these totals must stay the same: a change means something was lost.
+        /// </summary>
+        public static string LiquidReport(LabPotionsPopulator populator)
+        {
+            var counts = new SortedDictionary<int, int>();
+            void Add(Il2CppUnits units)
+            {
+                for (var i = 0; i < units.Count; i++)
+                {
+                    var family = (int)units[i];
+                    counts[family] = counts.TryGetValue(family, out var n) ? n + 1 : 1;
+                }
+            }
+            foreach (var entry in populator._potionsByUid)
+                Add(entry.Value.Contents._units);
+            foreach (var vat in Vats())
+                Add(vat.Contents._units);
+            foreach (var separator in Separators())
+            {
+                var units = new Il2CppUnits();
+                separator.CopyLoopUnits(units);
+                Add(units);
+            }
+            return $"bottles={populator._potionsByUid.Count} total={counts.Values.Sum()} | " + string.Join(" ", counts.Select(c => $"{c.Key}:{c.Value}"));
+        }
+
+        static readonly HashSet<int> ReportedDoubleClaims = new();
+
+        /// <summary>
+        /// Potion uid → slot uid, from the slots' side. The world digest and the states we send must use the same
+        /// rule: with the game's own TryGetSlotOf a potion claimed by two slots could read differently in each.
+        /// </summary>
+        public static Dictionary<int, int> SlotMap(LabPotionsPopulator populator, bool report = false)
+        {
+            var map = new Dictionary<int, int>();
+            foreach (var entry in populator._slotsByUid)
+            {
+                var occupant = entry.Value.Potion;
+                if (occupant == null)
+                    continue;
+                var uid = occupant.Uid;
+                if (report && map.TryGetValue(uid, out var first) && ReportedDoubleClaims.Add(uid))
+                    CoopMod.Log.Warning($"#{uid} is claimed by two slots (#{first} and #{entry.Key})");
+                map[uid] = entry.Key;
+            }
+            return map;
+        }
+
         /// <summary>State of one vessel as seen by this peer.</summary>
-        public static NetPotion Read(LabPotionsPopulator populator, PotionFacade potion, HashSet<int> localHeld, bool withPose = true)
+        /// <param name="slotOf">From <see cref="SlotMap"/> when reading many vessels (and to agree with the digest).</param>
+        public static NetPotion Read(LabPotionsPopulator populator, PotionFacade potion, HashSet<int> localHeld, bool withPose = true,
+            Dictionary<int, int> slotOf = null)
         {
             var uid = potion.Uid;
             var state = new NetPotion { Uid = uid, Units = ReadUnits(potion.Contents._units) };
+            slotOf ??= SlotMap(populator);
 
             if (localHeld.Contains(uid))
                 state.Location = HeldBySelf;
             else if (RemoteHeld.Contains(uid))
                 state.Location = HeldByOther;
-            else if (populator.TryGetSlotOf(potion, out var slot) && slot != null)
+            else if (slotOf.TryGetValue(uid, out var slotUid))
             {
                 state.Location = NetLocation.Slot;
-                state.Place = slot.Uid;
+                state.Place = slotUid;
             }
             else if (potion.IsHanging && potion.HangingHolder != null)
             {
@@ -207,6 +260,7 @@ namespace PotionCoop.Game
             AsApplying(() =>
             {
                 var localHeld = LocalHeld(populator);
+                var slotOf = SlotMap(populator);
                 var work = new List<(PotionFacade potion, NetPotion target, NetPotion current)>();
 
                 foreach (var target in states)
@@ -229,7 +283,7 @@ namespace PotionCoop.Game
                     }
                     // A newer state overrides an animation still on its way.
                     FinishFlight(target.Uid);
-                    var current = Read(populator, potion, localHeld);
+                    var current = Read(populator, potion, localHeld, slotOf: slotOf);
                     work.Add((potion, target, current));
                 }
 

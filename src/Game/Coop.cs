@@ -52,6 +52,7 @@ namespace PotionCoop.Game
         static uint[] _myDigest;
         static readonly int[] MismatchStreak = new int[Protocol.BucketCount];
         static bool _initialSyncRequested;
+        static float _nextLiquidLog;
 
         static Ghost _ghost;
         static float _nextPlayerSend;
@@ -662,6 +663,7 @@ namespace PotionCoop.Game
 
             var populator = GameRefs.Populator;
             var held = World.LocalHeld(populator);
+            var slots = World.SlotMap(populator);
             var msg = new StatesMsg();
 
             foreach (var uid in DirtyPotions)
@@ -676,7 +678,7 @@ namespace PotionCoop.Game
                     PendingSettle.Remove(uid);
                     continue;
                 }
-                var state = World.Read(populator, potion, held);
+                var state = World.Read(populator, potion, held, slotOf: slots);
                 if (state.Location == NetLocation.Floor && potion.CarryState.Value != ePotionCarryState.Idle
                     && Now - PendingSettle[uid] < SettleTimeout)
                 {
@@ -736,10 +738,11 @@ namespace PotionCoop.Game
             var populator = GameRefs.Populator;
             var held = World.LocalHeld(populator);
             var wanted = new HashSet<int>(buckets);
+            var slots = World.SlotMap(populator);
             var msg = new StatesMsg { Resync = true };
             foreach (var entry in populator._potionsByUid)
                 if (wanted.Contains(Protocol.BucketOf(entry.Key)))
-                    msg.Potions.Add(World.Read(populator, entry.Value, held));
+                    msg.Potions.Add(World.Read(populator, entry.Value, held, slotOf: slots));
             if (wanted.Contains(0))
             {
                 msg.Vats.AddRange(World.Vats().Select(World.ReadVat));
@@ -772,13 +775,7 @@ namespace PotionCoop.Game
                     _scanList = potions.ToArray();
                     _scanUids = uids.ToArray();
                 }
-                _scanSlotOf = new Dictionary<int, int>();
-                foreach (var entry in populator._slotsByUid)
-                {
-                    var occupant = entry.Value.Potion;
-                    if (occupant != null)
-                        _scanSlotOf[occupant.Uid] = entry.Key;
-                }
+                _scanSlotOf = World.SlotMap(populator, report: true);
                 _scanHeld = World.LocalHeld(populator);
                 _scanAcc = new uint[Protocol.BucketCount];
                 foreach (var vat in World.Vats())
@@ -827,6 +824,13 @@ namespace PotionCoop.Game
 
             _myDigest = _scanAcc;
             _scanIndex = -1;
+            // Liquid totals in the log now and then (and once per lab), to compare the two players and over time.
+            if (Now >= _nextLiquidLog)
+            {
+                _nextLiquidLog = Now + 300f;
+                try { CoopMod.Log.Msg($"[liquid] {World.LiquidReport(populator)}"); }
+                catch (Exception e) { CoopMod.Log.Warning($"liquid report: {e.Message}"); }
+            }
             _nextScan = Now + DigestInterval;
             if (IsHost)
                 _session.Send(new DigestMsg
@@ -885,12 +889,13 @@ namespace PotionCoop.Game
 
             var populator = GameRefs.Populator;
             var held = World.LocalHeld(populator);
+            var slots = World.SlotMap(populator);
             var report = new List<string>();
             foreach (var host in states.Potions)
             {
                 if (!populator.TryGetPotion(host.Uid, out var potion) || potion == null)
                     continue;
-                var mine = World.Read(populator, potion, held, withPose: false);
+                var mine = World.Read(populator, potion, held, withPose: false, slotOf: slots);
                 if (World.Hash(mine) != World.Hash(host))
                     report.Add($"#{host.Uid} host={host.Location}@{host.Place} me={mine.Location}@{mine.Place}");
                 if (report.Count >= 10)
@@ -916,6 +921,7 @@ namespace PotionCoop.Game
                 var hero = GameRefs.Hero;
                 if (hero != null)
                     line += $" pos={hero.Position}";
+                line += $"\n[liquid] {World.LiquidReport(populator)}";
             }
             CoopMod.Log.Msg(line);
         }
@@ -939,6 +945,7 @@ namespace PotionCoop.Game
             _scanUids = null;
             _lastHeld.Clear();
             _initialSyncRequested = false;
+            _nextLiquidLog = 0f;
             World.ResetLevel();
             CatSync.Forget();
         }
