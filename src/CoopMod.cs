@@ -17,6 +17,7 @@ namespace PotionCoop
     {
         internal static MelonLogger.Instance Log;
         bool _showPanel = true;
+        static float UiScale = 1f;
 
         public override void OnInitializeMelon()
         {
@@ -65,6 +66,11 @@ namespace PotionCoop
 
         public override void OnGUI()
         {
+            // IMGUI defaults are tiny on 1440p/4K screens.
+            var scale = Mathf.Max(1f, Screen.height / 1080f);
+            GUI.skin.box.fontSize = Mathf.RoundToInt(14 * scale);
+            GUI.skin.label.fontSize = Mathf.RoundToInt(16 * scale);
+            UiScale = scale;
             if (_showPanel)
                 DrawPanel();
             DrawGhostLabel();
@@ -87,8 +93,8 @@ namespace PotionCoop
             else if (!Coop.IsRunning)
                 text += "   (Ctrl+F8 host · Ctrl+F9 katıl · Ctrl+F12 gizle)";
 
-            var width = Mathf.Min(Screen.width - 20, 760);
-            GUI.Box(new Rect((Screen.width - width) / 2f, 6, width, 26), text);
+            var width = Mathf.Min(Screen.width - 20, 760 * UiScale);
+            GUI.Box(new Rect((Screen.width - width) / 2f, 6 * UiScale, width, 28 * UiScale), text);
         }
 
         static void DrawGhostLabel()
@@ -105,7 +111,9 @@ namespace PotionCoop
                 label += $"  ({ghost.Held} şişe)";
             if (ghost.InMenu)
                 label += "  · menüde";
-            GUI.Label(new Rect(screen.x - 110, Screen.height - screen.y - 12, 220, 24), label);
+            var w = 260 * UiScale;
+            var h = 28 * UiScale;
+            GUI.Label(new Rect(screen.x - w / 2f, Screen.height - screen.y - h / 2f, w, h), label);
         }
     }
 }

@@ -1,7 +1,7 @@
 // FakePeer: a scripted stand-in for the second player, for testing the host side of PotionCoop on one PC.
 // Usage: dotnet run -- [host=127.0.0.1] [port=47777] [gameVersion=1.2.6]
-// It joins, orbits the host's position as a ghost, then borrows one shelved bottle:
-// takes it (hidden on the host), drops it at the host's feet, and puts it back on its shelf.
+// It joins, orbits the host's position as a ghost, then borrows the floor bottle nearest the host:
+// takes it (hidden on the host), drops it at the host's feet, and puts it back where it was.
 
 using System.Net.Sockets;
 using System.Text;
@@ -46,6 +46,7 @@ Send(new { T = "hello", Mod = ModVersion, Game = gameVersion, Name = "Bot" });
 float hx = 0, hy = 0, hz = 0;
 bool haveHostPos = false;
 JsonNode borrowed = null; // original state of the bottle we play with
+var floor = new List<JsonNode>(); // floor vessels with positions, to pick one next to the host
 var welcomed = false;
 
 var reader = new Thread(() =>
@@ -83,7 +84,8 @@ var reader = new Thread(() =>
                     {
                         var byLoc = potions.GroupBy(x => (int)x["l"]).Select(g => $"{g.Key}:{g.Count()}");
                         Log($"world chunk: {potions.Count} vessels ({string.Join(" ", byLoc)}), {vats.Count} vats");
-                        borrowed ??= potions.FirstOrDefault(x => (int)x["l"] == 2)?.DeepClone();
+                        lock (floor)
+                            floor.AddRange(potions.Where(x => (int)x["l"] == 0 && x["p"] != null).Select(x => x.DeepClone()));
                     }
                     else
                         Log($"host changed: {string.Join(", ", potions.Select(x => $"#{x["u"]} loc={x["l"]} place={x["s"]}"))} vats={vats.Count}");
@@ -128,15 +130,27 @@ while (true)
     var yaw = MathF.Atan2(hx - x, hz - z) * 180f / MathF.PI;
     Send(new { T = "p", Pos = new[] { x, hy, z }, Yaw = yaw, Pitch = 10f, InMenu = false, Held = phase == 1 ? 1 : 0 });
 
-    if (borrowed == null || t < phaseAt)
+    if (t < phaseAt)
         continue;
+    if (borrowed == null)
+    {
+        lock (floor)
+            borrowed = floor.OrderBy(v =>
+            {
+                var q = v["p"].AsArray();
+                float dx = (float)q[0] - hx, dz = (float)q[2] - hz;
+                return dx * dx + dz * dz;
+            }).FirstOrDefault();
+        if (borrowed == null)
+            continue;
+    }
 
     var uid = (int)borrowed["u"];
     var units = borrowed["n"];
     switch (phase)
     {
         case 0:
-            Log($"taking #{uid} from slot {borrowed["s"]} (should vanish from the shelf)");
+            Log($"taking #{uid}, the floor bottle nearest to the host (should vanish)");
             Send(new { T = "s", Potions = new[] { new { u = uid, l = 11, s = 0, n = units } }, Vats = Array.Empty<object>() });
             break;
         case 1:
@@ -144,8 +158,8 @@ while (true)
             Send(new { T = "s", Potions = new[] { new { u = uid, l = 0, s = 0, p = new[] { hx + 0.6f, hy + 0.4f, hz }, r = new[] { 0f, 0f, 0f, 1f }, n = units } }, Vats = Array.Empty<object>() });
             break;
         case 2:
-            Log($"putting #{uid} back into slot {borrowed["s"]}");
-            Send(new { T = "s", Potions = new[] { new { u = uid, l = 2, s = (int)borrowed["s"], n = units } }, Vats = Array.Empty<object>() });
+            Log($"putting #{uid} back where it was");
+            Send(new { T = "s", Potions = new[] { new { u = uid, l = 0, s = 0, p = borrowed["p"].DeepClone(), r = borrowed["r"].DeepClone(), n = units } }, Vats = Array.Empty<object>() });
             break;
         case 3:
             Log("done; still orbiting (Ctrl+C to quit)");

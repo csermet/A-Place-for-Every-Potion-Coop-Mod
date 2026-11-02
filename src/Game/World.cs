@@ -110,17 +110,32 @@ namespace PotionCoop.Game
         /// <summary>Order-independent hash of what matters for sync (floor poses excluded: they are cosmetic).</summary>
         public static uint Hash(NetPotion s)
         {
-            unchecked
-            {
-                var h = 2166136261u;
-                void Mix(int v) { h = (h ^ (uint)v) * 16777619u; }
-                Mix(s.Uid);
-                Mix((int)s.Location);
-                Mix(s.Location is NetLocation.Slot or NetLocation.Holder ? s.Place : 0);
-                foreach (var u in s.Units)
-                    Mix(u);
-                return h;
-            }
+            var h = HashHead(s.Uid, s.Location, s.Place);
+            foreach (var u in s.Units)
+                h = Mix(h, u);
+            return h;
+        }
+
+        /// <summary>Same hash as <see cref="Hash(NetPotion)"/>, straight from the game objects (used by the periodic scan).</summary>
+        public static uint Hash(int uid, NetLocation location, int place, Il2CppUnits units)
+        {
+            var h = HashHead(uid, location, place);
+            var count = units.Count;
+            for (var i = 0; i < count; i++)
+                h = Mix(h, (int)units[i]);
+            return h;
+        }
+
+        static uint HashHead(int uid, NetLocation location, int place)
+        {
+            var h = Mix(2166136261u, uid);
+            h = Mix(h, (int)location);
+            return Mix(h, location is NetLocation.Slot or NetLocation.Holder ? place : 0);
+        }
+
+        static uint Mix(uint h, int v)
+        {
+            unchecked { return (h ^ (uint)v) * 16777619u; }
         }
 
         public static uint Hash(NetVat v)
@@ -281,7 +296,7 @@ namespace PotionCoop.Game
                 case NetLocation.Floor:
                     var pos = target.Pos != null ? ToVector(target.Pos) : potion.transform.position;
                     var rot = target.Rot != null ? new Quaternion(target.Rot[0], target.Rot[1], target.Rot[2], target.Rot[3]) : potion.transform.rotation;
-                    potion.BeginFlyToDrop(populator._floorPotionsRoot, pos, rot, true);
+                    DropAt(potion, pos, rot);
                     persistence.RecordDropped(potion);
                     break;
 
@@ -289,7 +304,7 @@ namespace PotionCoop.Game
                     // HeldBySelf for a vessel not in our hands: the other side thinks we hold it. Drop it at our feet.
                     var hero = GameRefs.Hero;
                     var feet = hero != null ? hero.Position + Vector3.up * 0.3f : potion.transform.position;
-                    potion.BeginFlyToDrop(populator._floorPotionsRoot, feet, potion.transform.rotation, true);
+                    DropAt(potion, feet, potion.transform.rotation);
                     persistence.RecordDropped(potion);
                     break;
             }
@@ -299,8 +314,18 @@ namespace PotionCoop.Game
         {
             if (RemoteHeld.Contains(potion.Uid))
                 return;
-            potion.BeginFlyToDrop(GameRefs.Populator._floorPotionsRoot, ParkingSpot, Quaternion.identity, true);
+            DropAt(potion, ParkingSpot, Quaternion.identity);
             potion.Freeze();
+        }
+
+        /// <summary>Puts a vessel on the floor the way the game's own drop does (same parent), instantly.</summary>
+        static void DropAt(PotionFacade potion, Vector3 position, Quaternion rotation)
+        {
+            var root = GameRefs.DropRoot;
+            if (root != null)
+                potion.BeginFlyToDrop(root, position, rotation, true);
+            else
+                potion.transform.SetPositionAndRotation(position, rotation);
         }
 
         static void Unpark(PotionFacade potion)

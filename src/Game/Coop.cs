@@ -18,7 +18,7 @@ namespace PotionCoop.Game
         const float PlayerSendInterval = 0.05f;
         const float PingInterval = 2f;
         const float DigestInterval = 4f;
-        const int ScanChunk = 350;
+        const int ScanChunk = 150;
         const float SettleTimeout = 8f;
 
         static TcpSession _session;
@@ -37,6 +37,11 @@ namespace PotionCoop.Game
 
         // digest scanning
         static PotionFacade[] _scanList;
+        static int[] _scanUids;
+        static Dictionary<int, int> _scanSlotOf;
+        static double _scanCostMs;
+        static double _scanWorstFrameMs;
+        static float _nextScanReport;
         static int _scanIndex = -1;
         static uint[] _scanAcc;
         static HashSet<int> _scanHeld;
@@ -83,6 +88,11 @@ namespace PotionCoop.Game
 
         public static void Join()
         {
+            if (IsRunning && IsHost)
+            {
+                Status = "zaten host'sun (kapatmak için Ctrl+F8)";
+                return;
+            }
             if (!SavePaths.Active && GameRefs.State is not (eGameState.Lobby or eGameState.LoadLobby or eGameState.None))
             {
                 Status = "katılmak için ana menüde ol (Ctrl+F9)";
@@ -147,7 +157,10 @@ namespace PotionCoop.Game
                 return;
 
             while (_session != null && _session.Poll(out var frame))
-                Handle(frame);
+            {
+                try { Handle(frame); }
+                catch (Exception e) { CoopMod.Log.Error($"message failed: {e}"); }
+            }
 
             if (!IsConnected)
                 return;
@@ -436,30 +449,70 @@ namespace PotionCoop.Game
         static void ScanStep()
         {
             var populator = GameRefs.Populator;
+            var watch = System.Diagnostics.Stopwatch.StartNew();
             if (_scanIndex < 0)
             {
                 if (Now < _nextScan)
                     return;
-                var all = new List<PotionFacade>(populator.PotionCount);
-                foreach (var entry in populator._potionsByUid)
-                    all.Add(entry.Value);
-                _scanList = all.ToArray();
+                if (_scanList == null)
+                {
+                    var potions = new List<PotionFacade>(populator.PotionCount);
+                    var uids = new List<int>(populator.PotionCount);
+                    foreach (var entry in populator._potionsByUid)
+                    {
+                        potions.Add(entry.Value);
+                        uids.Add(entry.Key);
+                    }
+                    _scanList = potions.ToArray();
+                    _scanUids = uids.ToArray();
+                }
+                _scanSlotOf = new Dictionary<int, int>();
+                foreach (var entry in populator._slotsByUid)
+                {
+                    var occupant = entry.Value.Potion;
+                    if (occupant != null)
+                        _scanSlotOf[occupant.Uid] = entry.Key;
+                }
                 _scanHeld = World.LocalHeld(populator);
                 _scanAcc = new uint[Protocol.BucketCount];
                 foreach (var vat in World.Vats())
                     _scanAcc[0] += World.Hash(World.ReadVat(vat));
                 _scanIndex = 0;
+                _scanCostMs = 0;
+                _scanWorstFrameMs = 0;
             }
 
+            var self = World.HeldBySelf;
+            var other = World.HeldByOther;
             var end = Math.Min(_scanIndex + ScanChunk, _scanList.Length);
             for (; _scanIndex < end; _scanIndex++)
             {
                 var potion = _scanList[_scanIndex];
                 if (potion == null)
                     continue;
-                var state = World.Read(populator, potion, _scanHeld, withPose: false);
-                _scanAcc[Protocol.BucketOf(state.Uid)] += World.Hash(state);
+                var uid = _scanUids[_scanIndex];
+                var place = 0;
+                NetLocation location;
+                if (_scanHeld.Contains(uid))
+                    location = self;
+                else if (World.RemoteHeld.Contains(uid))
+                    location = other;
+                else if (_scanSlotOf.TryGetValue(uid, out place))
+                    location = NetLocation.Slot;
+                else if (potion.IsHanging)
+                {
+                    location = NetLocation.Holder;
+                    var holder = potion.HangingHolder;
+                    place = holder != null ? holder.Index : 0;
+                }
+                else
+                    location = NetLocation.Floor;
+                _scanAcc[Protocol.BucketOf(uid)] += World.Hash(uid, location, place, potion.Contents._units);
             }
+
+            var frameMs = watch.Elapsed.TotalMilliseconds;
+            _scanCostMs += frameMs;
+            _scanWorstFrameMs = Math.Max(_scanWorstFrameMs, frameMs);
 
             if (_scanIndex < _scanList.Length)
                 return;
@@ -469,6 +522,11 @@ namespace PotionCoop.Game
             _nextScan = Now + DigestInterval;
             if (IsHost)
                 _session.Send(new DigestMsg { Buckets = _myDigest });
+            if (Now >= _nextScanReport)
+            {
+                _nextScanReport = Now + 60f;
+                CoopMod.Log.Msg($"world scan: {_scanCostMs:F1} ms total, worst frame {_scanWorstFrameMs:F1} ms");
+            }
         }
 
         static void CompareDigest(uint[] hostDigest)
@@ -515,6 +573,8 @@ namespace PotionCoop.Game
         {
             GameRefs.Forget();
             _scanIndex = -1;
+            _scanList = null;
+            _scanUids = null;
             _lastHeld.Clear();
             _initialSyncRequested = false;
             World.RemoteHeld.Clear();
