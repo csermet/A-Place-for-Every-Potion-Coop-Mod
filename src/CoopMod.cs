@@ -40,8 +40,6 @@ namespace PotionCoop
             Log.Msg("PotionCoop loaded (phase 1 probe)");
         }
 
-        public override void OnLateInitializeMelon() => XrefDump.Run();
-
         public override void OnUpdate()
         {
             if (!_loggedFirstUpdate)
