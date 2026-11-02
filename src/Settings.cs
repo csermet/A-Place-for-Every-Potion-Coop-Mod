@@ -22,14 +22,25 @@ namespace PotionCoop
             _hostAddress = category.CreateEntry("HostAddress", "", description: "Boşsa host ağda otomatik aranır; bulunamazsa host'un IP'sini yaz (ör. 192.168.1.20)");
             _verbose = category.CreateEntry("Verbose", false, description: "Gönderilen her değişikliği logla");
             _hostId = category.CreateEntry("HostId", "", description: "Bu kurulumun kimliği (katılanlar profillerini buna göre ayırır); değiştirme");
-            if (string.IsNullOrWhiteSpace(_hostId.Value))
-            {
+            _machine = category.CreateEntry("Machine", "", description: "Bu ayarların ait olduğu bilgisayar (klasör kopyalanınca isim ve kimlik yenilenir)");
+
+            // The game folder is copied to the friend's PC with these settings in it: a different computer gets
+            // its own id and starts with its own Windows user name instead of ours.
+            var machine = Environment.MachineName;
+            var copied = !string.IsNullOrEmpty(_machine.Value) && _machine.Value != machine;
+            if (copied)
+                _name.Value = Environment.UserName;
+            if (copied || string.IsNullOrWhiteSpace(_hostId.Value))
                 _hostId.Value = Guid.NewGuid().ToString("N");
+            if (copied || _machine.Value != machine)
+            {
+                _machine.Value = machine;
                 Save();
             }
         }
 
         static MelonPreferences_Entry<string> _hostId;
+        static MelonPreferences_Entry<string> _machine;
 
         /// <summary>Stable id of this install, sent when hosting: a guest keeps one profile per host.</summary>
         public static string HostId => _hostId.Value;
