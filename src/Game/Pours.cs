@@ -84,12 +84,34 @@ namespace PotionCoop.Game
             if (source == null)
                 return;
 
+            PotionFacade targetPotion = null;
+            VatFacade targetVat = null;
+            if (msg.To.K == VesselRef.Potion)
+                populator.TryGetPotion(msg.To.U, out targetPotion);
+            else if (msg.To.K == VesselRef.Vat)
+                targetVat = World.FindVat(msg.To.U);
+            if (targetPotion == null && targetVat == null)
+                return;
+
+            // What can really move here. Our copies of the two vessels can differ from the sender's for a moment (the
+            // other player poured into or out of one of them at the same instant): liquid must never appear or vanish,
+            // so only what this side can both take and hold moves. The sender's states settle the rest.
+            var room = targetPotion != null ? targetPotion.Contents.FreeSpace : targetVat.Contents.FreeSpace;
+            var available = sourcePotion != null
+                ? (!sourcePotion.Contents.IsEmpty && sourcePotion.Contents.TopFamily == family ? sourcePotion.Contents.TopRunLength : 0)
+                : RunAtEnd(tapVat, family);
+            var moved = Math.Min(units, Math.Min(room, available));
+            if (moved < units)
+                CoopMod.Log.Msg($"pour of {units} {family}: only {moved} can move here (the vessels just changed on this side too)");
+
             Vector3? targetPoint = null;
             World.AsApplying(() =>
             {
-                if (msg.To.K == VesselRef.Potion && populator.TryGetPotion(msg.To.U, out var target) && target != null)
+                if (targetPotion != null)
                 {
-                    target.ReceivePour(source, family, units, false);
+                    var target = targetPotion;
+                    if (moved > 0)
+                        target.ReceivePour(source, family, moved, false);
                     target.RevealPourOver(duration, false);
                     targetPoint = target.transform.position + Vector3.up * 0.12f;
                     After(duration, () =>
@@ -101,9 +123,11 @@ namespace PotionCoop.Game
                     if (tap != null && tap.Spout != null)
                         World.HoldUnder(target.Uid, tap.Spout.position, duration);
                 }
-                else if (msg.To.K == VesselRef.Vat && World.FindVat(msg.To.U) is { } vat)
+                else
                 {
-                    vat.ReceivePour(source, family, units, false);
+                    var vat = targetVat;
+                    if (moved > 0)
+                        vat.ReceivePour(source, family, moved, false);
                     vat.RevealPour(false);
                     targetPoint = vat.LiquidSurfacePoint;
                     After(duration, () => vat.OnReceiveFinished(source));
@@ -111,7 +135,8 @@ namespace PotionCoop.Game
 
                 if (sourcePotion != null)
                 {
-                    sourcePotion.DrainOut(units, false);
+                    if (moved > 0)
+                        sourcePotion.DrainOut(moved, false);
                     sourcePotion.RevealDrain(duration, false);
                     if (targetPoint.HasValue)
                         World.TipOver(sourcePotion.Uid, targetPoint.Value, duration);
@@ -121,16 +146,41 @@ namespace PotionCoop.Game
                 }
                 else if (tap != null)
                 {
+                    // The game takes the drawn units out of the vat as the draw starts (the level follows later); so
+                    // does the replay, or the units would be in the vat and in the bottle at once until the sender's
+                    // states arrive (and stay so if those cross one of ours).
+                    TakeFromVat(tapVat, family, moved);
                     tap.SetOpen(true, false);
                     var driver = tapVat.Driver();
-                    driver.HoldOutgoing(units);
-                    driver.ReleaseOutgoing(units, false, duration);
+                    driver.HoldOutgoing(moved);
+                    driver.ReleaseOutgoing(moved, false, duration);
                     After(duration, () => tap.SetOpen(false, false));
                 }
             });
         }
 
+        /// <summary>How many units of this family a tap can draw: the run at the end of the vat's list.</summary>
+        static int RunAtEnd(VatFacade vat, eSectionFamily family)
+        {
+            var list = vat.Contents._units;
+            var run = 0;
+            for (var i = list.Count - 1; i >= 0 && list[i] == family; i--)
+                run++;
+            return run;
+        }
+
+        /// <summary>A tap draws the last units of the vat's list (measured: a draw takes the list's end).</summary>
+        static void TakeFromVat(VatFacade vat, eSectionFamily family, int units)
+        {
+            var contents = vat.Contents;
+            for (var n = 0; n < units && RunAtEnd(vat, family) > 0; n++)
+                contents.RemoveAt(contents._units.Count - 1);
+        }
+
         static void After(float seconds, Action action) => Later.Add((Time.realtimeSinceStartup + seconds, action));
+
+        /// <summary>A replayed pour is still running.</summary>
+        public static bool Busy => Later.Count > 0;
 
         /// <summary>Per frame in the lab: the ends of pours that are due.</summary>
         public static void Tick()

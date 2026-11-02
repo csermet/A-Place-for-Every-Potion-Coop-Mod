@@ -35,6 +35,15 @@ namespace PotionCoop.Game
         static readonly int[] FruitlessResyncs = new int[Protocol.BucketCount];
         static HashSet<int> _lastHeld = new();
 
+        // stale-state guard (see StatesMsg.Ack): which of our states messages last carried a change of each vessel
+        static int _sendSeq;
+        static int _seenSeq;
+        static readonly Dictionary<int, int> SentPotionAt = new();
+        static readonly Dictionary<int, int> SentVatAt = new();
+        static bool _initialWorldPending;
+        static int _staleDropped;
+        static int _otherLabDropped;
+
         // world messages wait here while the level is loading
         static readonly List<(string type, JObject body)> Deferred = new();
 
@@ -51,6 +60,16 @@ namespace PotionCoop.Game
         static float _nextScan;
         static uint[] _myDigest;
         static readonly int[] MismatchStreak = new int[Protocol.BucketCount];
+        /// <summary>When a vessel of each bucket last changed by a live state (ours or theirs).</summary>
+        static readonly float[] BucketActivity = new float[Protocol.BucketCount];
+
+        static void Touch(StatesMsg msg)
+        {
+            foreach (var potion in msg.Potions)
+                BucketActivity[Protocol.BucketOf(potion.Uid)] = Now;
+            if (msg.Vats.Count > 0)
+                BucketActivity[0] = Now;
+        }
         static bool _initialSyncRequested;
         static float _nextLiquidLog;
 
@@ -170,18 +189,17 @@ namespace PotionCoop.Game
                 Status = $"waiting for {_remoteName} to enter the lab…";
                 return;
             }
-            if (Profiles.ActiveHostId != _hostId)
+            if (Profiles.ActiveHostId != _hostId && !Profiles.Exists(_hostId))
             {
-                if (!Profiles.Exists(_hostId))
-                {
-                    Stage = GuestStage.Choosing;
-                    Status = $"first time in {_remoteName}'s lab";
-                    UI.CoopPanel.Show();
-                    return;
-                }
-                if (!Profiles.Enter(_hostId, _hostWorld, _hostBuckets, null))
-                    return;
+                Stage = GuestStage.Choosing;
+                Status = $"first time in {_remoteName}'s lab";
+                UI.CoopPanel.Show();
+                return;
             }
+            // Always through the profile, even when already in it: it takes the host's world as it is now (after a
+            // finished lab that is a new one).
+            if (!Profiles.Enter(_hostId, _hostWorld, _hostBuckets, null))
+                return;
             EnterHostLab();
         }
 
@@ -279,7 +297,7 @@ namespace PotionCoop.Game
         public static void SendPour(VesselRef from, VesselRef to, eSectionFamily family, int units)
         {
             if (CanSendPour)
-                _session.Send(new PourMsg { From = from, To = to, F = (int)family, N = units });
+                _session.Send(new PourMsg { From = from, To = to, F = (int)family, N = units, L = CurrentLab });
         }
 
         /// <summary>Joining is done from the main menu, so the shared world is loaded into the co-op save folder.</summary>
@@ -360,8 +378,14 @@ namespace PotionCoop.Game
             SentFalling.Clear();
             HostVatCapacity.Clear();
             HostSeparator = null;
+            _sendSeq = 0;
+            _seenSeq = 0;
+            SentPotionAt.Clear();
+            SentVatAt.Clear();
+            _initialWorldPending = false;
             Array.Clear(FruitlessResyncs, 0, FruitlessResyncs.Length);
             Array.Clear(MismatchStreak, 0, MismatchStreak.Length);
+            Array.Clear(BucketActivity, 0, BucketActivity.Length);
             _ghost?.Destroy();
             _ghost = null;
             CatSync.Release();
@@ -381,6 +405,8 @@ namespace PotionCoop.Game
                     catch (Exception e) { CoopMod.Log.Error($"message failed: {e}"); }
                 }
             }
+
+            Liquid.Tick();
 
             if (!IsConnected)
             {
@@ -403,6 +429,7 @@ namespace PotionCoop.Game
                 if (!IsHost && !_initialSyncRequested)
                 {
                     _initialSyncRequested = true;
+                    _initialWorldPending = true;
                     _session.Send(new NeedMsg { Buckets = Enumerable.Range(0, Protocol.BucketCount).ToArray() });
                     CoopMod.Log.Msg("asked host for the full world");
                 }
@@ -518,7 +545,8 @@ namespace PotionCoop.Game
                     var world = msg.body.ToObject<WorldMsg>();
                     _hostWorld = world.World;
                     _hostBuckets = world.Buckets;
-                    if (Stage == GuestStage.WaitingForHost)
+                    // Waiting for the host, or back in the menu with them (a finished lab): follow them in.
+                    if (Stage == GuestStage.WaitingForHost || (Stage == GuestStage.None && Profiles.Active && GameFlow.InLobby))
                         GuestProceed();
                     return;
 
@@ -558,8 +586,9 @@ namespace PotionCoop.Game
             if (msg.type == "pour")
             {
                 // Only worth playing while it happens; the final states follow anyway.
-                if (GameRefs.InLevel)
-                    Pours.Play(msg.body.ToObject<PourMsg>());
+                var pour = msg.body.ToObject<PourMsg>();
+                if (GameRefs.InLevel && (pour.L == 0 || pour.L == CurrentLab))
+                    Pours.Play(pour);
                 return;
             }
 
@@ -575,7 +604,20 @@ namespace PotionCoop.Game
             {
                 case "s":
                     var states = body.ToObject<StatesMsg>();
-                    var changed = World.Apply(states.Potions, states.Vats, animate: !states.Resync);
+                    var lab = CurrentLab;
+                    if (states.Lab != 0 && lab != 0 && states.Lab != lab)
+                    {
+                        // Sent from another lab (one of us has just moved on): its bottle numbers mean other bottles here.
+                        _seenSeq = Math.Max(_seenSeq, states.Seq);
+                        if (_otherLabDropped++ < 5)
+                            CoopMod.Log.Msg($"ignored {states.Potions.Count} state(s) from another lab ({states.Lab}, ours {lab})");
+                        break;
+                    }
+                    if (!DropStale(states))
+                        break;
+                    if (!states.Resync)
+                        Touch(states);
+                    var changed = World.Apply(states.Potions, states.Vats, animate: !states.Resync, fixHeld: states.Fix && !IsHost);
                     if (states.Resync)
                         CheckResyncProgress(states, changed);
                     if (states.Resync || changed > 0)
@@ -586,8 +628,14 @@ namespace PotionCoop.Game
                     SendBuckets(body.ToObject<NeedMsg>().Buckets);
                     break;
 
+                case "sep" when IsHost:
+                    HostSeparatorPour(body.ToObject<SeparatorPourMsg>());
+                    break;
+
                 case "d" when !IsHost:
                     var digest = body.ToObject<DigestMsg>();
+                    if (digest.L != 0 && CurrentLab != 0 && digest.L != CurrentLab)
+                        break;
                     if (digest.VatCapacity != null)
                         foreach (var pair in digest.VatCapacity)
                             HostVatCapacity[pair.Key] = pair.Value;
@@ -655,10 +703,44 @@ namespace PotionCoop.Game
                 DirtyVats.Add(vat.Uid);
         }
 
+        /// <summary>
+        /// The separator changed: its loop, and the bottles hanging on it (it fills and drains them). Only the host's
+        /// separator runs (see <see cref="SeparatorAuthorityPatches"/>), so only the host reports it.
+        /// </summary>
         public static void MarkSeparator(Il2CppCodeBase.Components.EssenceSeparator.EssenceSeparatorFacade separator)
         {
-            if (ShouldTrack() && separator != null)
-                DirtyVats.Add(separator.Uid);
+            if (!ShouldTrack() || separator == null || !IsHost)
+                return;
+            DirtyVats.Add(separator.Uid);
+            var holders = separator._holders;
+            for (var i = 0; holders != null && i < holders.Length; i++)
+            {
+                var vessel = holders[i] != null ? holders[i]._vessel : null;
+                if (vessel != null)
+                    DirtyPotions.Add(vessel.Uid);
+            }
+        }
+
+        /// <summary>Guest: a pour out of a separator holder, for the host's separator to do.</summary>
+        public static void SendSeparatorPour(Il2CppCodeBase.Components.EssenceSeparator.EssenceSeparatorFacade separator,
+            Il2CppCodeBase.Components.EssenceSeparator.PourOutHolderFacade holder)
+        {
+            if (IsConnected && !IsHost)
+                _session.Send(new SeparatorPourMsg { U = separator.Uid, H = holder.Index });
+        }
+
+        static void HostSeparatorPour(SeparatorPourMsg msg)
+        {
+            var separator = World.Separators().FirstOrDefault(s => s.Uid == msg.U);
+            if (separator == null || !separator.TryGetHolder(msg.H, out var holder) || holder == null || !separator.CanPourOutOf(holder))
+            {
+                CoopMod.Log.Msg($"guest's separator pour at holder {msg.H}: nothing to pour here");
+                return;
+            }
+            var poured = separator.PourOutOf(holder, false);
+            MarkSeparator(separator);
+            if (Settings.Verbose)
+                CoopMod.Log.Msg($"guest's separator pour at holder {msg.H}: {poured} unit(s)");
         }
 
         static bool ShouldTrack() => IsConnected && !World.Applying && GameRefs.InLevel;
@@ -734,6 +816,7 @@ namespace PotionCoop.Game
 
             if (msg.Potions.Count > 0 || msg.Vats.Count > 0)
             {
+                Stamp(msg, localChanges: true);
                 _session.Send(msg);
                 if (Settings.Verbose)
                     CoopMod.Log.Msg($"sent {string.Join(", ", msg.Potions.Select(p => $"#{p.Uid}:{p.Location}{(p.Place != 0 ? "@" + p.Place : "")}"))} vats={msg.Vats.Count}");
@@ -755,8 +838,111 @@ namespace PotionCoop.Game
                 msg.Vats.AddRange(World.Vats().Select(World.ReadVat));
                 msg.Vats.AddRange(World.Separators().Select(World.ReadSeparator));
             }
+            Stamp(msg, localChanges: false);
             _session.Send(msg);
             CoopMod.Log.Msg($"sent {msg.Potions.Count} vessel(s) for bucket(s) {string.Join(",", buckets)}");
+        }
+
+        // ---------- stale states ----------
+        //
+        // Both players change the world, and a states message can cross one of ours on the wire: the other side wrote
+        // it before it had our latest change of a vessel (typically a resync answer arriving just after we poured).
+        // Applying it would put back the old contents of that one vessel while its partner in the pour keeps the new:
+        // liquid lost or doubled. So every states message carries its number and the number of the last of ours the
+        // sender had applied; a vessel we changed after that keeps our state, which is on its way to them.
+
+        static int CurrentLab => GameFlow.Data?.Get<Il2CppCodeBase.Services.PersistentDataService.PlayerProgress>()?.LabManifestHash ?? 0;
+
+        static void Stamp(StatesMsg msg, bool localChanges)
+        {
+            msg.Seq = ++_sendSeq;
+            msg.Ack = _seenSeq;
+            msg.Lab = CurrentLab;
+            if (!localChanges)
+                return;
+            Touch(msg);
+            foreach (var potion in msg.Potions)
+                SentPotionAt[potion.Uid] = msg.Seq;
+            foreach (var vat in msg.Vats)
+                SentVatAt[vat.Uid] = msg.Seq;
+        }
+
+        /// <returns>False when the whole message is turned down (host, see below).</returns>
+        static bool DropStale(StatesMsg states)
+        {
+            _seenSeq = Math.Max(_seenSeq, states.Seq);
+            // The guest's first full world: the host's word on everything (as before), nothing to guard yet.
+            if (states.Resync && _initialWorldPending && !IsHost)
+            {
+                _initialWorldPending = false;
+                SentPotionAt.Clear();
+                SentVatAt.Clear();
+                return true;
+            }
+            var ack = states.Ack;
+            bool Stale(Dictionary<int, int> sentAt, int uid) => sentAt.TryGetValue(uid, out var at) && at > ack;
+            var stale = states.Potions.Count(p => Stale(SentPotionAt, p.Uid)) + states.Vats.Count(v => Stale(SentVatAt, v.Uid));
+            // What the other side has applied needs no guarding any more.
+            Forget(SentPotionAt, ack);
+            Forget(SentVatAt, ack);
+            if (stale == 0)
+                return true;
+
+            if (IsHost)
+            {
+                // A guest message about a vessel we changed meanwhile: both of us acted on it at the same instant
+                // (e.g. drawing the last unit of a vat). Its changes go together (a pour's two ends travel in one
+                // message), so take none of them: our version of every vessel in it stands and goes back to the guest.
+                SendOurs(states);
+                if (_staleDropped++ < 50)
+                    CoopMod.Log.Msg($"the guest acted on {stale} vessel(s) we had just changed: ours stand ({states.Potions.Count + states.Vats.Count} sent back)");
+                states.Potions.Clear();
+                states.Vats.Clear();
+                return false;
+            }
+
+            // Guest: our newer change of these is on its way to the host (who has the final word and answers if it
+            // turns it down); the rest of the message applies.
+            states.Potions.RemoveAll(p => Stale(SentPotionAt, p.Uid));
+            states.Vats.RemoveAll(v => Stale(SentVatAt, v.Uid));
+            if (_staleDropped++ < 50)
+                CoopMod.Log.Msg($"kept our newer state of {stale} vessel(s) over a crossing message");
+            return true;
+        }
+
+        /// <summary>Host: our state of every vessel in a guest message we turned down, to be taken as it is.</summary>
+        static void SendOurs(StatesMsg turnedDown)
+        {
+            var populator = GameRefs.Populator;
+            var held = World.LocalHeld(populator);
+            var slots = World.SlotMap(populator);
+            var answer = new StatesMsg { Fix = true };
+            foreach (var state in turnedDown.Potions)
+                if (populator.TryGetPotion(state.Uid, out var potion) && potion != null)
+                    answer.Potions.Add(World.Read(populator, potion, held, slotOf: slots));
+            foreach (var state in turnedDown.Vats)
+            {
+                var vat = World.FindVat(state.Uid);
+                if (vat != null)
+                    answer.Vats.Add(World.ReadVat(vat));
+                else if (World.Separators().FirstOrDefault(s => s.Uid == state.Uid) is { } separator)
+                    answer.Vats.Add(World.ReadSeparator(separator));
+            }
+            Stamp(answer, localChanges: true);
+            _session.Send(answer);
+        }
+
+        static void Forget(Dictionary<int, int> sentAt, int ack)
+        {
+            if (sentAt.Count == 0)
+                return;
+            List<int> done = null;
+            foreach (var pair in sentAt)
+                if (pair.Value <= ack)
+                    (done ??= new List<int>()).Add(pair.Key);
+            if (done != null)
+                foreach (var uid in done)
+                    sentAt.Remove(uid);
         }
 
         // ---------- digest healing ----------
@@ -869,6 +1055,7 @@ namespace PotionCoop.Game
             if (IsHost)
                 _session.Send(new DigestMsg
                 {
+                    L = CurrentLab,
                     Buckets = _myDigest,
                     VatCapacity = World.Vats().ToDictionary(v => v.Uid, v => v.Capacity),
                     Separator = ReadSeparatorRules(),
@@ -888,7 +1075,9 @@ namespace PotionCoop.Game
             var need = new List<int>();
             for (var b = 0; b < Protocol.BucketCount; b++)
             {
-                if (hostDigest[b] == _myDigest[b])
+                // A bucket someone is working in right now differs between two scans taken seconds apart anyway:
+                // judge it once it has been quiet for a while (its changes travel as states meanwhile).
+                if (hostDigest[b] == _myDigest[b] || Now - BucketActivity[b] < DigestInterval * 2f)
                 {
                     MismatchStreak[b] = 0;
                     continue;
@@ -935,7 +1124,31 @@ namespace PotionCoop.Game
                 if (report.Count >= 10)
                     break;
             }
-            CoopMod.Log.Warning($"buckets {string.Join(",", buckets)} do not converge; differing: {(report.Count > 0 ? string.Join("; ", report) : "none per vessel (vats?)")}");
+            if (report.Count == 0)
+            {
+                // Every vessel the host sent matches: then the difference is in what is counted, not in a state.
+                var sent = new HashSet<int>(states.Potions.Select(p => p.Uid));
+                foreach (var b in buckets)
+                {
+                    var mine = new List<int>();
+                    var nulls = 0;
+                    foreach (var entry in populator._potionsByUid)
+                    {
+                        if (Protocol.BucketOf(entry.Key) != b)
+                            continue;
+                        if (entry.Value == null)
+                            nulls++;
+                        else
+                            mine.Add(entry.Key);
+                    }
+                    var onlyMine = mine.Where(u => !sent.Contains(u)).Take(5).ToList();
+                    var onlyHost = sent.Where(u => Protocol.BucketOf(u) == b && !mine.Contains(u)).Take(5).ToList();
+                    var staleScan = _scanUids == null ? 0 : _scanUids.Where((u, i) => Protocol.BucketOf(u) == b && _scanList[i] == null).Count();
+                    report.Add($"bucket {b}: {mine.Count} here ({nulls} gone, {staleScan} gone from the scan list), " +
+                               $"{sent.Count(u => Protocol.BucketOf(u) == b)} from host; only here [{string.Join(",", onlyMine)}], only host [{string.Join(",", onlyHost)}]");
+                }
+            }
+            CoopMod.Log.Warning($"buckets {string.Join(",", buckets)} do not converge; differing: {string.Join("; ", report)}");
             foreach (var b in buckets)
                 FruitlessResyncs[b] = 0;
         }

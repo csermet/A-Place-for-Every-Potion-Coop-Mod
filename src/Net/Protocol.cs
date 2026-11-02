@@ -126,6 +126,16 @@ namespace PotionCoop.Net
         public VesselRef To;
         public int F;
         public int N;
+        /// <summary>The sender's lab (see <see cref="StatesMsg.Lab"/>).</summary>
+        public int L;
+    }
+
+    /// <summary>Guest → host: pour out of the bottle on this separator holder (only the host's separator runs).</summary>
+    internal sealed class SeparatorPourMsg
+    {
+        public string T = "sep";
+        public int U;
+        public int H;
     }
 
     internal sealed class RejectMsg
@@ -163,6 +173,20 @@ namespace PotionCoop.Net
         public List<NetVat> Vats = new();
         /// <summary>True when this answers a resync request (receiver may re-check digests afterwards).</summary>
         public bool Resync;
+        /// <summary>Sender's running number of states messages.</summary>
+        [JsonProperty("q")] public int Seq;
+        /// <summary>
+        /// The last of the receiver's own states messages the sender had applied when it wrote this one. A vessel the
+        /// receiver changed after that is newer on the receiver's side: this message's state of it is stale.
+        /// </summary>
+        [JsonProperty("k")] public int Ack;
+        /// <summary>The sender's lab (manifest hash): states of another lab's bottles must not land on ours.</summary>
+        [JsonProperty("l")] public int Lab;
+        /// <summary>
+        /// Host's answer to a guest message it turned down: these are the vessels as they are, contents included for
+        /// bottles in the guest's own hands (normally the guest's to say).
+        /// </summary>
+        [JsonProperty("x", DefaultValueHandling = DefaultValueHandling.Ignore)] public bool Fix;
     }
 
     /// <summary>Host's per-bucket world hashes (index 0 = vats, 1..16 = potion buckets).</summary>
@@ -173,6 +197,8 @@ namespace PotionCoop.Net
         /// <summary>Host's vat capacities (vat uid -> units). They depend on the host's skills and rule the shared vats.</summary>
         public Dictionary<int, int> VatCapacity;
         public NetSeparatorRules Separator;
+        /// <summary>The host's lab (see <see cref="StatesMsg.Lab"/>).</summary>
+        public int L;
     }
 
     /// <summary>Client asks the host for the full state of some buckets.</summary>
@@ -196,7 +222,7 @@ namespace PotionCoop.Net
 
     internal static class Protocol
     {
-        public const string ModVersion = "0.4.5";
+        public const string ModVersion = "0.4.6";
         public const int BucketCount = 17;
 
         static readonly JsonSerializerSettings Settings = new()

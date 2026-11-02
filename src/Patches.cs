@@ -168,6 +168,41 @@ namespace PotionCoop
     }
 
     /// <summary>
+    /// The Essence Separator moves liquid by itself: its loop carries units from one hanging bottle to another. A copy
+    /// of that machine running on each PC would move the same units twice, a little apart in time, and the two
+    /// results cross on the wire (units lost or doubled). So only the host's machine runs. The guest's stands still
+    /// and shows the host's (its loop and hanging bottles arrive as states), and a pour the guest starts on it is
+    /// sent to the host to do.
+    /// </summary>
+    [HarmonyPatch]
+    static class SeparatorAuthorityPatches
+    {
+        [HarmonyPrefix, HarmonyPatch(typeof(Il2CppCodeBase.Components.EssenceSeparator.EssenceLoopCirculator),
+             nameof(Il2CppCodeBase.Components.EssenceSeparator.EssenceLoopCirculator.Update))]
+        static bool Circulate() => !Coop.FollowHostSeparator;
+
+        [HarmonyPrefix, HarmonyPatch(typeof(Il2CppCodeBase.Components.EssenceSeparator.EssenceSeparatorFacade),
+             nameof(Il2CppCodeBase.Components.EssenceSeparator.EssenceSeparatorFacade.PourOutOf))]
+        static bool PourOutOf(Il2CppCodeBase.Components.EssenceSeparator.EssenceSeparatorFacade __instance,
+            Il2CppCodeBase.Components.EssenceSeparator.PourOutHolderFacade __0, ref int __result)
+        {
+            if (!Coop.FollowHostSeparator)
+                return true;
+            __result = 0;
+            if (!World.Applying && __0 != null && __instance.CanPourOutOf(__0))
+            {
+                Coop.SendSeparatorPour(__instance, __0);
+                __result = 1;
+            }
+            return false;
+        }
+
+        [HarmonyPrefix, HarmonyPatch(typeof(Il2CppCodeBase.Components.EssenceSeparator.EssenceSeparatorFacade),
+             nameof(Il2CppCodeBase.Components.EssenceSeparator.EssenceSeparatorFacade.FinishTransfersAt))]
+        static bool FinishTransfers() => !Coop.FollowHostSeparator;
+    }
+
+    /// <summary>
     /// Pours that finish without a placement record (into a shelved potion, into a vat, drawing from a tap):
     /// mark both ends so the new liquids go out at once instead of waiting for the periodic world check.
     /// </summary>
@@ -198,11 +233,31 @@ namespace PotionCoop
                 Coop.MarkPotion(potion);
         }
 
-        // A pour starting here: the other side plays it while it happens (the final states follow as usual).
+        // A pour starting here: the other side plays it while it happens. The game moves the liquid right at the
+        // start (only the level animates after), so both vessels' states go out now too, not just when the pour is
+        // seen to end: until they arrive the other side would work from the old contents (a resync in between could
+        // restore one of the two and lose or double the liquid).
+
+        static void MarkVessel(IPourVessel vessel)
+        {
+            if (vessel == null)
+                return;
+            var potion = vessel.TryCast<PotionFacade>();
+            if (potion != null)
+            {
+                Coop.MarkPotion(potion);
+                return;
+            }
+            var vat = vessel.TryCast<VatFacade>();
+            if (vat != null)
+                Coop.MarkVat(vat);
+        }
 
         [HarmonyPostfix, HarmonyPatch(typeof(PotionFacade), nameof(PotionFacade.PourOutInto))]
         static void PourStarted(PotionFacade __instance, IPourVessel __0, eSectionFamily __1, int __2, bool __3)
         {
+            Coop.MarkPotion(__instance);
+            MarkVessel(__0);
             if (__3 || !Coop.CanSendPour)
                 return;
             var to = Pours.Ref(__0);
@@ -213,6 +268,8 @@ namespace PotionCoop
         [HarmonyPostfix, HarmonyPatch(typeof(VatFacade), nameof(VatFacade.DrawOutInto))]
         static void DrawStarted(VatFacade __instance, VatTapFacade __0, PotionFacade __1, eSectionFamily __2, int __3, bool __4)
         {
+            Coop.MarkVat(__instance);
+            Coop.MarkPotion(__1);
             if (__4 || !Coop.CanSendPour || __0 == null || __1 == null)
                 return;
             var tap = Pours.TapIndex(__instance, __0);

@@ -45,7 +45,7 @@ namespace PotionCoop.Game
             return result;
         }
 
-        static Il2CppReadOnlyUnits ToIl2Cpp(byte[] units)
+        public static Il2CppReadOnlyUnits ToIl2Cpp(byte[] units)
         {
             var list = new Il2CppUnits(units.Length);
             foreach (var unit in units)
@@ -249,7 +249,8 @@ namespace PotionCoop.Game
 
         /// <summary>Brings the given vessels to the given states. Returns how many changed.</summary>
         /// <param name="animate">Live changes glide into place; bulk resyncs snap.</param>
-        public static int Apply(IReadOnlyList<NetPotion> states, IReadOnlyList<NetVat> vats, bool animate = true)
+        /// <param name="fixHeld">The host's word on contents even for bottles in our hands (see StatesMsg.Fix).</param>
+        public static int Apply(IReadOnlyList<NetPotion> states, IReadOnlyList<NetVat> vats, bool animate = true, bool fixHeld = false)
         {
             var populator = GameRefs.Populator;
             var persistence = GameRefs.Persistence;
@@ -270,7 +271,16 @@ namespace PotionCoop.Game
                     if (localHeld.Contains(target.Uid))
                     {
                         if (target.Location == HeldBySelf)
+                        {
+                            if (fixHeld && !target.Units.SequenceEqual(ReadUnits(potion.Contents._units)))
+                            {
+                                potion.SetLiquidContents(ToIl2Cpp(target.Units));
+                                SealIfFinished(potion);
+                                FixVisual(potion);
+                                changed++;
+                            }
                             continue;
+                        }
                         // Both of us hold it (grabbed at the same instant, or the client's own save had it in hand).
                         // The host has the final word: the host keeps it and repeats its state; the client lets go.
                         if (Coop.IsHost)
@@ -353,6 +363,9 @@ namespace PotionCoop.Game
                         try
                         {
                             separator.SetLoopUnits(ToIl2Cpp(target.Units));
+                            // A guest's loop stands still (only the host's runs): draw the new units ourselves.
+                            if (Coop.FollowHostSeparator)
+                                separator._circulator?.UpdatePicture();
                             persistence.RecordSeparator(separator);
                             changed++;
                         }

@@ -24,6 +24,12 @@ namespace PotionCoop
         {
             Log = LoggerInstance;
             Settings.Init();
+            // Development aid: --coop-saves <folder> plays the world and progress of another save folder (e.g. a copy
+            // of a backup) instead of the solo saves.
+            var args = Environment.GetCommandLineArgs();
+            var saves = Array.IndexOf(args, "--coop-saves");
+            if (saves >= 0 && saves + 1 < args.Length)
+                SavePaths.Activate(args[saves + 1]);
             Log.Msg($"PotionCoop {Net.Protocol.ModVersion} ready: CO-OP in the main menu (spare keys Ctrl+F8 host, Ctrl+F9 join)");
         }
 
@@ -36,6 +42,7 @@ namespace PotionCoop
                 MenuButton.Tick();
                 CoopPanel.Tick();
                 UiDump.Tick();
+                DevTests.Tick();
             }
             catch (Exception e) { Log.Error($"update: {e}"); }
         }
