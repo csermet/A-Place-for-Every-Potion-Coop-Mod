@@ -24,6 +24,19 @@ namespace PotionCoop
         }
 
         public static string Name => string.IsNullOrWhiteSpace(_name.Value) ? "Oyuncu" : _name.Value.Trim();
+        public static string RawName => _name.Value;
+
+        public static void SetName(string name)
+        {
+            if (name == _name.Value)
+                return;
+            _name.Value = name.Length > 24 ? name.Substring(0, 24) : name;
+        }
+
+        public static void SetHostAddress(string address) => _hostAddress.Value = address;
+
+        /// <summary>Writes UserData\MelonPreferences.cfg (called when the co-op panel closes, not on every keystroke).</summary>
+        public static void Save() => MelonPreferences.Save();
         public static int Port => _port.Value;
         public static int DiscoveryPort => _port.Value + 1;
         public static string HostAddress => _hostAddress.Value;

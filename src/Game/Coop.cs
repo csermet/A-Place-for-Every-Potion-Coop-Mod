@@ -31,6 +31,8 @@ namespace PotionCoop.Game
         static readonly HashSet<int> DirtyVats = new();
         static readonly Dictionary<int, float> PendingSettle = new();
         static readonly HashSet<int> SentFalling = new();
+        static int _tossLogs;
+        static readonly int[] FruitlessResyncs = new int[Protocol.BucketCount];
         static HashSet<int> _lastHeld = new();
 
         // world messages wait here while the level is loading
@@ -89,38 +91,56 @@ namespace PotionCoop.Game
             }
         }
 
-        public static void Join()
+        /// <summary>Joining is done from the main menu, so the shared world is loaded into the co-op save folder.</summary>
+        public static string JoinBlocker =>
+            IsRunning && IsHost ? "zaten host'sun (önce host'u kapat)"
+            : !SavePaths.Active && GameRefs.State is not (eGameState.Lobby or eGameState.LoadLobby or eGameState.None)
+                ? "katılmak için ana menüye dön"
+                : null;
+
+        /// <summary>Join a known host, or (no address) the configured HostAddress, or whoever answers on the LAN.</summary>
+        public static void Join(IPAddress address = null, int port = 0)
         {
-            if (IsRunning && IsHost)
+            var blocker = JoinBlocker;
+            if (blocker != null)
             {
-                Status = "zaten host'sun (kapatmak için Ctrl+F8)";
-                return;
-            }
-            if (!SavePaths.Active && GameRefs.State is not (eGameState.Lobby or eGameState.LoadLobby or eGameState.None))
-            {
-                Status = "katılmak için ana menüde ol (Ctrl+F9)";
+                Status = blocker;
                 return;
             }
             Stop();
+            if (address != null)
+            {
+                Connect(address, port > 0 ? port : Settings.Port);
+                return;
+            }
             Status = "host aranıyor...";
             var configured = Settings.HostAddress;
             Task.Run(() =>
             {
-                IPAddress address;
-                var port = Settings.Port;
+                IPAddress found;
+                var foundPort = Settings.Port;
                 if (!string.IsNullOrWhiteSpace(configured) && IPAddress.TryParse(configured.Trim(), out var parsed))
-                    address = parsed;
-                else if (!DiscoveryResponder.TryFind(Settings.DiscoveryPort, TimeSpan.FromSeconds(4), out address, out port, out _))
+                    found = parsed;
+                else if (!DiscoveryResponder.TryFind(Settings.DiscoveryPort, TimeSpan.FromSeconds(4), out found, out foundPort, out _))
                 {
-                    MainThread.Post(() => Status = "host bulunamadı (aynı ağda mısınız? host Ctrl+F8'e bastı mı?)");
+                    MainThread.Post(() => Status = "host bulunamadı: host'un ekranındaki IP'yi elle yaz");
                     return;
                 }
-                MainThread.Post(() =>
-                {
-                    Status = $"{address} adresine bağlanılıyor...";
-                    _session = TcpSession.Join(address, port);
-                });
+                MainThread.Post(() => Connect(found, foundPort));
             });
+        }
+
+        static void Connect(IPAddress address, int port)
+        {
+            Status = $"{address} adresine bağlanılıyor...";
+            _session = TcpSession.Join(address, port);
+        }
+
+        /// <summary>Host: the client claimed something we hold. Send our state of it again (we have the final word).</summary>
+        public static void Reassert(int uid)
+        {
+            if (IsConnected && IsHost)
+                DirtyPotions.Add(uid);
         }
 
         public static void Stop()
@@ -148,6 +168,7 @@ namespace PotionCoop.Game
             PendingSettle.Clear();
             SentFalling.Clear();
             HostVatCapacity.Clear();
+            Array.Clear(FruitlessResyncs, 0, FruitlessResyncs.Length);
             Array.Clear(MismatchStreak, 0, MismatchStreak.Length);
             _ghost?.Destroy();
             _ghost = null;
@@ -263,7 +284,11 @@ namespace PotionCoop.Game
                     var hello = msg.body.ToObject<HelloMsg>();
                     if (hello.Mod != Protocol.ModVersion || hello.Game != Application.version)
                     {
-                        _session.Send(new RejectMsg { Reason = $"sürüm uyuşmuyor: mod {hello.Mod}/{Protocol.ModVersion}, oyun {hello.Game}/{Application.version}" });
+                        _session.Send(new RejectMsg
+                        {
+                            Reason = $"sürümler farklı (sende mod {hello.Mod}, oyun {hello.Game}; host'ta mod {Protocol.ModVersion}, oyun {Application.version}). " +
+                                     "İki tarafta aynı oyun klasörünü kullanın.",
+                        });
                         Status = $"{hello.Name} reddedildi: sürüm uyuşmuyor";
                         return;
                     }
@@ -278,7 +303,9 @@ namespace PotionCoop.Game
                     _remoteName = msg.body.ToObject<WelcomeMsg>().Name;
                     _ready = true;
                     SavePaths.Activate();
-                    Status = $"{_remoteName} ile bağlı";
+                    Status = SavePaths.HasStartedGame()
+                        ? $"{_remoteName} ile bağlı: Devam et'e bas"
+                        : $"{_remoteName} ile bağlı: bu PC'de kayıt yok, Yeni Oyun'a bas";
                     CoopMod.Log.Msg($"joined {_remoteName}'s world");
                     return;
 
@@ -328,6 +355,8 @@ namespace PotionCoop.Game
                 case "s":
                     var states = body.ToObject<StatesMsg>();
                     var changed = World.Apply(states.Potions, states.Vats, animate: !states.Resync);
+                    if (states.Resync)
+                        CheckResyncProgress(states, changed);
                     if (states.Resync || changed > 0)
                         CoopMod.Log.Msg($"applied {states.Potions.Count} vessel(s), {states.Vats.Count} vat(s): {changed} changed{(states.Resync ? " [resync]" : "")}");
                     break;
@@ -435,6 +464,24 @@ namespace PotionCoop.Game
                     if (SentFalling.Add(uid))
                     {
                         state.Falling = true;
+                        // A thrown bottle (R) flies to the point the player aimed at; the game knows it already.
+                        if (potion.DropStyle == eDropStyle.BallisticToss)
+                        {
+                            var target = potion.DropTargetPosition;
+                            if (target != Vector3.zero && (target - potion.transform.position).sqrMagnitude < 400f)
+                            {
+                                var rot = potion._carrier != null ? potion._carrier.DropTargetRotation : potion.transform.rotation;
+                                state.Pos = new[] { target.x, target.y, target.z };
+                                state.Rot = new[] { rot.x, rot.y, rot.z, rot.w };
+                                state.Toss = true;
+                            }
+                        }
+                        if (_tossLogs < 10)
+                        {
+                            _tossLogs++;
+                            CoopMod.Log.Msg($"[diag] drop #{uid} style={potion.DropStyle} from={potion.transform.position} " +
+                                            $"target={potion.DropTargetPosition} toss={state.Toss}");
+                        }
                         msg.Potions.Add(state);
                     }
                     continue;
@@ -592,6 +639,55 @@ namespace PotionCoop.Game
                 CoopMod.Log.Msg($"worlds differ in bucket(s) {string.Join(",", need)}; asking host");
                 _session.Send(new NeedMsg { Buckets = need.ToArray() });
             }
+        }
+
+        /// <summary>
+        /// A resync that changes nothing yet keeps being needed means something refuses to converge:
+        /// name the vessels that still differ after applying, so the log says what and where.
+        /// </summary>
+        static void CheckResyncProgress(StatesMsg states, int changed)
+        {
+            var buckets = states.Potions.Select(p => Protocol.BucketOf(p.Uid)).Distinct().ToList();
+            foreach (var b in buckets)
+                FruitlessResyncs[b] = changed == 0 ? FruitlessResyncs[b] + 1 : 0;
+            if (changed > 0 || buckets.All(b => FruitlessResyncs[b] < 3))
+                return;
+
+            var populator = GameRefs.Populator;
+            var held = World.LocalHeld(populator);
+            var report = new List<string>();
+            foreach (var host in states.Potions)
+            {
+                if (!populator.TryGetPotion(host.Uid, out var potion) || potion == null)
+                    continue;
+                var mine = World.Read(populator, potion, held, withPose: false);
+                if (World.Hash(mine) != World.Hash(host))
+                    report.Add($"#{host.Uid} host={host.Location}@{host.Place} me={mine.Location}@{mine.Place}");
+                if (report.Count >= 10)
+                    break;
+            }
+            CoopMod.Log.Warning($"buckets {string.Join(",", buckets)} do not converge; differing: {(report.Count > 0 ? string.Join("; ", report) : "none per vessel (vats?)")}");
+            foreach (var b in buckets)
+                FruitlessResyncs[b] = 0;
+        }
+
+        /// <summary>Ctrl+F7: a one-line health report to compare between the two players' logs.</summary>
+        public static void DumpStatus()
+        {
+            var line = $"[status] {(IsRunning ? (IsHost ? "host" : "client") : "offline")} connected={IsConnected} sync={InSync?.ToString() ?? "?"} ping={PingMs:F0}ms";
+            var populator = GameRefs.Populator;
+            if (GameRefs.InLevel && populator != null)
+            {
+                var data = populator._runtimeDataService.Get<Il2CppCodeBase.Services.RuntimeDataService.PlayerRuntimeData>();
+                line += $" held={populator.HeldPotions().Count} apron={populator.ApronPotions().Count} remoteHeld={World.RemoteHeld.Count}";
+                if (data != null)
+                    line += $" shelvedOk={data.CorrectlyShelvedPotions.Value} sealed={data.SealedPotions.Value} " +
+                            $"shelves={data.CompletedShelves.Value}/{data.TotalShelves.Value} sections={data.CompletedSections.Value}/{data.TotalSections.Value}";
+                var hero = GameRefs.Hero;
+                if (hero != null)
+                    line += $" pos={hero.Position}";
+            }
+            CoopMod.Log.Msg(line);
         }
 
         /// <summary>Client: ask for everything again. Host: hash now.</summary>

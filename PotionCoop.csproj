@@ -34,6 +34,12 @@
   <!-- Drop the built mod straight into the game's Mods folder -->
   <Target Name="CopyToMods" AfterTargets="Build">
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(GameDir)\Mods" />
+    <!-- Setup guide and firewall helper travel with the game folder to the friend's PC -->
+    <Copy SourceFiles="@(DistFiles)" DestinationFolder="$(GameDir)" />
   </Target>
+
+  <ItemGroup>
+    <DistFiles Include="dist\*" />
+  </ItemGroup>
 
 </Project>

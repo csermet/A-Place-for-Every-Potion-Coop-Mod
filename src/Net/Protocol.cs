@@ -28,6 +28,8 @@ namespace PotionCoop.Net
         [JsonProperty("n")] public byte[] Units;
         /// <summary>Floor only: the bottle has just left the sender's hand and is still falling.</summary>
         [JsonProperty("f", DefaultValueHandling = DefaultValueHandling.Ignore)] public bool Falling;
+        /// <summary>With Falling: Pos/Rot are where the throw will land (the game's own drop target).</summary>
+        [JsonProperty("t", DefaultValueHandling = DefaultValueHandling.Ignore)] public bool Toss;
     }
 
     internal sealed class NetVat
@@ -119,7 +121,7 @@ namespace PotionCoop.Net
 
     internal static class Protocol
     {
-        public const string ModVersion = "0.2.0";
+        public const string ModVersion = "0.3.0";
         public const int BucketCount = 17;
 
         static readonly JsonSerializerSettings Settings = new()

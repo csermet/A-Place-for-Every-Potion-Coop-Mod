@@ -4,6 +4,7 @@ using Il2CppCodeBase.Components.Cat;
 using Il2CppCodeBase.Components.Hero;
 using Il2CppCodeBase.Components.Potions;
 using Il2CppCodeBase.Components.Vats;
+using Il2CppCodeBase.Components.Vessels;
 using Il2CppCodeBase.Services.GameStateMachineService;
 using Il2CppCodeBase.Services.PotionsPersistenceService;
 using Il2CppCodeBase.Services.SaveLoadService;
@@ -52,6 +53,38 @@ namespace PotionCoop
 
         [HarmonyPostfix, HarmonyPatch(nameof(PotionsPersistence.RecordVat))]
         static void Vat(Il2CppCodeBase.Components.Vats.VatFacade __0) => Coop.MarkVat(__0);
+    }
+
+    /// <summary>
+    /// Pours that finish without a placement record (into a shelved potion, into a vat, drawing from a tap):
+    /// mark both ends so the new liquids go out at once instead of waiting for the periodic world check.
+    /// </summary>
+    [HarmonyPatch]
+    static class PourPatches
+    {
+        [HarmonyPostfix, HarmonyPatch(typeof(PotionFacade), nameof(PotionFacade.OnReceiveFinished))]
+        static void PotionReceived(PotionFacade __instance, IPourStreamSource __0)
+        {
+            Coop.MarkPotion(__instance);
+            MarkSource(__0);
+        }
+
+        [HarmonyPostfix, HarmonyPatch(typeof(VatFacade), nameof(VatFacade.OnReceiveFinished))]
+        static void VatReceived(VatFacade __instance, IPourStreamSource __0)
+        {
+            Coop.MarkVat(__instance);
+            MarkSource(__0);
+        }
+
+        [HarmonyPostfix, HarmonyPatch(typeof(VatFacade), nameof(VatFacade.OnTapDrawFinished))]
+        static void TapDrawn(VatFacade __instance) => Coop.MarkVat(__instance);
+
+        static void MarkSource(IPourStreamSource source)
+        {
+            var potion = source != null ? source.TryCast<PotionFacade>() : null;
+            if (potion != null)
+                Coop.MarkPotion(potion);
+        }
     }
 
     /// <summary>Client: the shared world lives in its own save folder (see <see cref="SavePaths"/>).</summary>

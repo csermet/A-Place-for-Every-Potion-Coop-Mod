@@ -197,10 +197,17 @@ namespace PotionCoop.Game
                         continue;
                     if (localHeld.Contains(target.Uid))
                     {
-                        // Both grabbed it at once. Our hands are ours; the digest check settles it later.
-                        if (target.Location != HeldBySelf)
-                            CoopMod.Log.Msg($"conflict: remote state for #{target.Uid} ({target.Location}) but it is in my hand");
-                        continue;
+                        if (target.Location == HeldBySelf)
+                            continue;
+                        // Both of us hold it (grabbed at the same instant, or the client's own save had it in hand).
+                        // The host has the final word: the host keeps it and repeats its state; the client lets go.
+                        if (Coop.IsHost)
+                        {
+                            Coop.Reassert(target.Uid);
+                            continue;
+                        }
+                        ReleaseFromLocalHand(populator, potion);
+                        localHeld.Remove(target.Uid);
                     }
                     // A newer state overrides an animation still on its way.
                     FinishFlight(target.Uid);
@@ -223,6 +230,9 @@ namespace PotionCoop.Game
                     if (!target.Units.SequenceEqual(current.Units))
                     {
                         potion.SetLiquidContents(ToIl2Cpp(target.Units));
+                        // A pour can finish a potion: let the cork and finished look follow the new contents.
+                        try { potion.Corker().ApplyCurrentState(true); }
+                        catch (Exception e) { CoopMod.Log.Warning($"cork state for #{target.Uid}: {e.Message}"); }
                         moved = true;
                     }
 
@@ -340,6 +350,19 @@ namespace PotionCoop.Game
                 case NetLocation.Floor:
                     var pos = target.Pos != null ? ToVector(target.Pos) : potion.transform.position;
                     var rot = target.Rot != null ? ToRotation(target.Rot) : potion.transform.rotation;
+                    if (target.Falling && target.Toss)
+                    {
+                        // Thrown (R): fly out of the ghost's hands along an arc to where the throw lands.
+                        void LandThrown()
+                        {
+                            RestoreColliders(potion);
+                            DropAt(potion, pos, rot);
+                            Falling.Add(uid);
+                            persistence.RecordDropped(potion);
+                        }
+                        Fly(potion, pos, rot, LandThrown, FlightKind.Toss);
+                        break;
+                    }
                     if (target.Falling)
                     {
                         // Just let go on the other side; its rest pose follows in a moment. Our physics would freeze a
@@ -354,9 +377,9 @@ namespace PotionCoop.Game
                             persistence.RecordDropped(potion);
                         }
                         if (fromHand)
-                            Fly(potion, pos, rot, () => Fly(potion, landing, lying, LandFallen, gravity: true));
+                            Fly(potion, pos, rot, () => Fly(potion, landing, lying, LandFallen, FlightKind.Fall));
                         else
-                            Fly(potion, landing, lying, LandFallen, gravity: true);
+                            Fly(potion, landing, lying, LandFallen, FlightKind.Fall);
                         break;
                     }
 
@@ -394,6 +417,45 @@ namespace PotionCoop.Game
         static readonly List<int> CarryOrder = new();
         /// <summary>Bottles we let fall with physics because they were still falling on the other side.</summary>
         static readonly HashSet<int> Falling = new();
+
+        /// <summary>
+        /// Client only: the host says a bottle in our hand or apron is somewhere else. Let go of it the way the game
+        /// would (out of the hand list and the first-person hand view); the caller then applies the host's state.
+        /// </summary>
+        static void ReleaseFromLocalHand(LabPotionsPopulator populator, PotionFacade potion)
+        {
+            var held = populator.HeldPotions();
+            var apron = populator.ApronPotions();
+            var fromApron = !held.Contains(potion) && apron.Contains(potion);
+            var hero = GameRefs.Hero;
+            var picker = hero != null ? hero._picker : null;
+
+            if (fromApron)
+                apron.Remove(potion);
+            else
+                held.Remove(potion);
+            try
+            {
+                var hand = picker != null ? picker._hand : null;
+                if (hand != null && hero != null)
+                    hand.MoveOutOfHand(potion, hero.Position + Vector3.up + hero.GetCameraForward() * 0.5f);
+                if (picker != null)
+                {
+                    if (fromApron)
+                        picker.ReseatApronRow(true);
+                    else
+                        picker.ReseatRow(true);
+                }
+                var carrier = potion._carrier;
+                if (carrier != null)
+                    carrier.MarkIdle();
+            }
+            catch (Exception e)
+            {
+                CoopMod.Log.Warning($"letting go of #{potion.Uid}: {e.Message}");
+            }
+            CoopMod.Log.Msg($"released #{potion.Uid} from my {(fromApron ? "apron" : "hand")}: the host has it elsewhere");
+        }
 
         static void Carry(PotionFacade potion)
         {
@@ -474,21 +536,33 @@ namespace PotionCoop.Game
             public Vector3 FromPos, ToPos;
             public Quaternion FromRot, ToRot;
             public float Start, Duration;
-            /// <summary>Accelerate like a falling object instead of easing in and out along an arc.</summary>
-            public bool Gravity;
+            public FlightKind Kind;
             public Action Done;
+        }
+
+        enum FlightKind
+        {
+            /// <summary>Ease in and out with a small hop (hand to shelf, short corrections).</summary>
+            Glide,
+            /// <summary>Accelerate straight down like a dropped object.</summary>
+            Fall,
+            /// <summary>A thrown arc: steady along the ground, up and down like a ball.</summary>
+            Toss,
         }
 
         static readonly List<Flight> Flights = new();
 
-        static void Fly(PotionFacade potion, Vector3 toPos, Quaternion toRot, Action done, bool gravity = false)
+        static void Fly(PotionFacade potion, Vector3 toPos, Quaternion toRot, Action done, FlightKind kind = FlightKind.Glide)
         {
             var t = potion.transform;
             var distance = Vector3.Distance(t.position, toPos);
-            // A real fall takes sqrt(2h/g); a short glide or toss scales with distance.
-            var duration = gravity
-                ? Mathf.Clamp(Mathf.Sqrt(2f * Mathf.Max(0.01f, t.position.y - toPos.y) / 9.81f), 0.12f, 0.7f)
-                : Mathf.Clamp(0.18f + distance * 0.12f, 0.2f, 0.6f);
+            var duration = kind switch
+            {
+                // A real fall takes sqrt(2h/g).
+                FlightKind.Fall => Mathf.Clamp(Mathf.Sqrt(2f * Mathf.Max(0.01f, t.position.y - toPos.y) / 9.81f), 0.12f, 0.7f),
+                FlightKind.Toss => Mathf.Clamp(0.3f + distance * 0.09f, 0.35f, 0.9f),
+                _ => Mathf.Clamp(0.18f + distance * 0.12f, 0.2f, 0.6f),
+            };
             Flights.Add(new Flight
             {
                 Potion = potion,
@@ -499,7 +573,7 @@ namespace PotionCoop.Game
                 ToRot = toRot,
                 Start = Time.realtimeSinceStartup,
                 Duration = duration,
-                Gravity = gravity,
+                Kind = kind,
                 Done = done,
             });
         }
@@ -559,8 +633,13 @@ namespace PotionCoop.Game
                     Complete(flight);
                     continue;
                 }
-                var eased = flight.Gravity ? p * p : p * p * (3f - 2f * p);
-                var arc = flight.Gravity ? 0f : Mathf.Sin(p * Mathf.PI) * Mathf.Min(0.3f, Vector3.Distance(flight.FromPos, flight.ToPos) * 0.25f);
+                var distance = Vector3.Distance(flight.FromPos, flight.ToPos);
+                var (eased, arc) = flight.Kind switch
+                {
+                    FlightKind.Fall => (p * p, 0f),
+                    FlightKind.Toss => (p, 4f * p * (1f - p) * Mathf.Clamp(distance * 0.3f, 0.2f, 1.2f)),
+                    _ => (p * p * (3f - 2f * p), Mathf.Sin(p * Mathf.PI) * Mathf.Min(0.3f, distance * 0.25f)),
+                };
                 flight.Potion.transform.SetPositionAndRotation(
                     Vector3.Lerp(flight.FromPos, flight.ToPos, eased) + Vector3.up * arc,
                     Quaternion.Slerp(flight.FromRot, flight.ToRot, eased));

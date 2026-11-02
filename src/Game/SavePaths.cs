@@ -44,6 +44,20 @@ namespace PotionCoop.Game
             }
         }
 
+        /// <summary>Has this PC ever started a game (so the menu offers Continue)?</summary>
+        public static bool HasStartedGame()
+        {
+            try
+            {
+                var progress = Path.Combine(SaveDir, "PlayerProgress");
+                return File.Exists(progress) && File.ReadAllText(progress).Contains("\"GameStarted\":true");
+            }
+            catch (Exception)
+            {
+                return true;
+            }
+        }
+
         public static void Deactivate()
         {
             if (!Active)
