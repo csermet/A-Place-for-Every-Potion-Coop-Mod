@@ -79,11 +79,27 @@ namespace PotionCoop
             GUI.skin.box.fontSize = Mathf.RoundToInt(14 * UiScale);
             GUI.skin.label.fontSize = Mathf.RoundToInt(16 * UiScale);
 
-            if (_showStatusBar && (Coop.IsRunning || GameRefs.State == Il2Cpp.eGameState.Lobby))
-                DrawStatusBar();
-            DrawGhostLabel();
-            CoopPanel.DrawPauseButton(UiScale);
-            CoopPanel.Draw(UiScale);
+            Guarded("status bar", () =>
+            {
+                if (_showStatusBar && (Coop.IsRunning || GameRefs.State == Il2Cpp.eGameState.Lobby))
+                    DrawStatusBar();
+            });
+            Guarded("name label", DrawGhostLabel);
+            Guarded("pause button", () => CoopPanel.DrawPauseButton(UiScale));
+            Guarded("co-op window", () => CoopPanel.Draw(UiScale));
+        }
+
+        static readonly System.Collections.Generic.HashSet<string> ReportedGuiErrors = new();
+
+        /// <summary>OnGUI runs several times a frame: report each failing piece once instead of flooding the log.</summary>
+        static void Guarded(string what, Action draw)
+        {
+            try { draw(); }
+            catch (Exception e)
+            {
+                if (ReportedGuiErrors.Add(what + e.GetType().Name))
+                    Log.Error($"drawing the {what} failed: {e}");
+            }
         }
 
         static void DrawStatusBar()

@@ -31,8 +31,8 @@ namespace PotionCoop.UI
         static List<string> _myAddresses = new();
         static float _addressesAt = -100f;
 
-        static string _manualAddress = "";
-        static string _nameField;
+        static readonly TextBox NameBox = new("", 24);
+        static readonly TextBox AddressBox = new("", 40, c => char.IsDigit(c) || c == '.' || c == ':');
 
         static GUIStyle _box, _title, _text, _small, _button, _field;
         static float _styledFor;
@@ -50,8 +50,8 @@ namespace PotionCoop.UI
         public static void Show()
         {
             Open = true;
-            _nameField = Settings.RawName;
-            _manualAddress = Settings.HostAddress ?? "";
+            NameBox.Text = Settings.RawName ?? "";
+            AddressBox.Text = Settings.HostAddress ?? "";
             _firstScanAt = -1f;
             _nextScan = 0f;
         }
@@ -61,6 +61,7 @@ namespace PotionCoop.UI
             if (!Open)
                 return;
             Open = false;
+            TextBox.Unfocus();
             Settings.Save();
         }
 
@@ -70,6 +71,9 @@ namespace PotionCoop.UI
             // The window needs a free mouse cursor: only in the main menu or while paused.
             if (Open && GameRefs.State is not (eGameState.Lobby or eGameState.Paused or eGameState.None))
                 Close();
+            TextBox.Tick();
+            if (Open && NameBox.Text != (Settings.RawName ?? ""))
+                Settings.SetName(NameBox.Text);
             if (!Open || Coop.IsRunning || _scanning || Now < _nextScan)
                 return;
 
@@ -105,8 +109,8 @@ namespace PotionCoop.UI
             var width = 560f * scale;
             var line = 30f * scale;
             var pad = 18f * scale;
-            var x = Screen.width - width - 40f * scale;
-            var y0 = 110f * scale;
+            var x = Screen.width - width - 30f * scale;
+            var y0 = 48f * scale;
 
             // Measure first (simple vertical layout), then draw the background behind it.
             var rows = new List<Action<Rect>>();
@@ -137,12 +141,9 @@ namespace PotionCoop.UI
             row(line * 1.2f, r =>
             {
                 GUI.Label(new Rect(r.x, r.y, 90 * scale, line), "İsmin:", _text);
-                var edited = GUI.TextField(new Rect(r.x + 90 * scale, r.y, 260 * scale, line), _nameField ?? "", 24, _field);
-                if (edited != _nameField)
-                {
-                    _nameField = edited;
-                    Settings.SetName(edited);
-                }
+                NameBox.Draw(new Rect(r.x + 90 * scale, r.y, 260 * scale, line), _field, _text, scale);
+                if (NameBox.Focused)
+                    GUI.Label(new Rect(r.x + 360 * scale, r.y, r.width - 360 * scale, line), "yaz, Enter ile bitir", _small);
             });
 
             row(line * 1.6f, r => GUI.Label(r, StatusText(), _small));
@@ -191,13 +192,14 @@ namespace PotionCoop.UI
             row(line * 1.5f, r =>
             {
                 GUI.Label(new Rect(r.x, r.y + 4 * scale, 120 * scale, line), "IP ile bağlan:", _text);
-                _manualAddress = GUI.TextField(new Rect(r.x + 125 * scale, r.y + 4 * scale, 200 * scale, line), _manualAddress ?? "", 40, _field);
+                AddressBox.Draw(new Rect(r.x + 125 * scale, r.y + 4 * scale, 200 * scale, line), _field, _text, scale);
                 GUI.enabled = blocker == null;
                 if (GUI.Button(new Rect(r.xMax - 140 * scale, r.y + 4 * scale, 140 * scale, line), "BAĞLAN", _button))
                 {
-                    if (IPAddress.TryParse(_manualAddress.Trim(), out var address))
+                    var typed = AddressBox.Text.Trim();
+                    if (IPAddress.TryParse(typed, out var address))
                     {
-                        Settings.SetHostAddress(_manualAddress.Trim());
+                        Settings.SetHostAddress(typed);
                         Coop.Join(address, Settings.Port);
                     }
                     else

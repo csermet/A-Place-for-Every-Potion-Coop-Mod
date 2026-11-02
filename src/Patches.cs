@@ -143,6 +143,17 @@ namespace PotionCoop
         }
     }
 
+    /// <summary>Our Co-op entry in the main menu is a copy of the Settings entry: its press opens the co-op window.</summary>
+    [HarmonyPatch(typeof(Il2CppCodeBase.Components.UI.BaseButton), nameof(Il2CppCodeBase.Components.UI.BaseButton.UpImpl))]
+    static class MenuButtonClickPatch
+    {
+        static void Postfix(Il2CppCodeBase.Components.UI.BaseButton __instance)
+        {
+            if (__instance != null && __instance.gameObject.name == UI.MenuButton.ObjectName)
+                UI.CoopPanel.Toggle();
+        }
+    }
+
     /// <summary>The cat knocks bottles over at random; only the host's cat does, and the result is synced.</summary>
     [HarmonyPatch(typeof(CatBottlePusher), nameof(CatBottlePusher.Knock))]
     static class CatPatch
