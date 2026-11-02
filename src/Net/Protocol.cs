@@ -26,6 +26,8 @@ namespace PotionCoop.Net
         [JsonProperty("p", NullValueHandling = NullValueHandling.Ignore)] public float[] Pos;
         [JsonProperty("r", NullValueHandling = NullValueHandling.Ignore)] public float[] Rot;
         [JsonProperty("n")] public byte[] Units;
+        /// <summary>Floor only: the bottle has just left the sender's hand and is still falling.</summary>
+        [JsonProperty("f", DefaultValueHandling = DefaultValueHandling.Ignore)] public bool Falling;
     }
 
     internal sealed class NetVat
@@ -81,6 +83,8 @@ namespace PotionCoop.Net
     {
         public string T = "d";
         public uint[] Buckets;
+        /// <summary>Host's vat capacities (vat uid -> units). They depend on the host's skills and rule the shared vats.</summary>
+        public Dictionary<int, int> VatCapacity;
     }
 
     /// <summary>Client asks the host for the full state of some buckets.</summary>
@@ -104,7 +108,7 @@ namespace PotionCoop.Net
 
     internal static class Protocol
     {
-        public const string ModVersion = "0.1.0";
+        public const string ModVersion = "0.2.0";
         public const int BucketCount = 17;
 
         static readonly JsonSerializerSettings Settings = new()

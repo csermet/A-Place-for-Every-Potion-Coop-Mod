@@ -29,7 +29,7 @@ namespace PotionCoop.Game
         /// <summary>Uids of vessels the other player currently holds (hidden locally).</summary>
         public static readonly HashSet<int> RemoteHeld = new();
 
-        /// <summary>Set while applying remote state so our persistence hooks don't echo it back.</summary>
+        /// <summary>True while remote state is being applied (our persistence hooks must not echo it back).</summary>
         public static bool Applying { get; private set; }
 
         public static NetLocation HeldBySelf => Coop.IsHost ? NetLocation.HeldByHost : NetLocation.HeldByClient;
@@ -167,6 +167,15 @@ namespace PotionCoop.Game
 
         // ---------- applying ----------
 
+        /// <summary>Runs an action flagged as remote application, so our persistence hooks don't echo it back.</summary>
+        static void AsApplying(Action action)
+        {
+            var was = Applying;
+            Applying = true;
+            try { action(); }
+            finally { Applying = was; }
+        }
+
         /// <summary>Brings the given vessels to the given states. Returns how many changed.</summary>
         public static int Apply(IReadOnlyList<NetPotion> states, IReadOnlyList<NetVat> vats)
         {
@@ -175,9 +184,8 @@ namespace PotionCoop.Game
             if (populator == null || persistence == null)
                 return 0;
 
-            Applying = true;
             var changed = 0;
-            try
+            AsApplying(() =>
             {
                 var localHeld = LocalHeld(populator);
                 var work = new List<(PotionFacade potion, NetPotion target, NetPotion current)>();
@@ -193,6 +201,8 @@ namespace PotionCoop.Game
                             CoopMod.Log.Msg($"conflict: remote state for #{target.Uid} ({target.Location}) but it is in my hand");
                         continue;
                     }
+                    // A newer state overrides an animation still on its way.
+                    FinishFlight(target.Uid);
                     var current = Read(populator, potion, localHeld);
                     work.Add((potion, target, current));
                 }
@@ -220,10 +230,16 @@ namespace PotionCoop.Game
                         Place(populator, persistence, potion, target);
                         moved = true;
                     }
-                    else if (moved && target.Location == NetLocation.Slot && populator.TryGetSlotOf(potion, out var slot))
-                        persistence.RecordShelved(potion, slot);
-                    else if (moved && target.Location == NetLocation.Floor)
-                        persistence.RecordDropped(potion);
+                    else
+                    {
+                        // The resting pose of a bottle we let fall: it landed where it should, so let it rest.
+                        if (target.Location == NetLocation.Floor && !target.Falling && Falling.Remove(target.Uid))
+                            potion.Freeze();
+                        if (moved && target.Location == NetLocation.Slot && populator.TryGetSlotOf(potion, out var slot))
+                            persistence.RecordShelved(potion, slot);
+                        else if (moved && target.Location == NetLocation.Floor)
+                            persistence.RecordDropped(potion);
+                    }
 
                     if (moved)
                         changed++;
@@ -241,11 +257,7 @@ namespace PotionCoop.Game
                         changed++;
                     }
                 }
-            }
-            finally
-            {
-                Applying = false;
-            }
+            });
             return changed;
         }
 
@@ -264,23 +276,27 @@ namespace PotionCoop.Game
 
         static Vector3 ToVector(float[] p) => new(p[0], p[1], p[2]);
 
+        static Quaternion ToRotation(float[] r) => new(r[0], r[1], r[2], r[3]);
+
         static void Place(LabPotionsPopulator populator, Il2CppCodeBase.Services.PotionsPersistenceService.IPotionsPersistence persistence,
             PotionFacade potion, NetPotion target)
         {
             var uid = target.Uid;
+            var fromHand = RemoteHeld.Contains(uid);
 
             if (target.Location == HeldByOther)
             {
-                Park(potion);
-                RemoteHeld.Add(uid);
-                Diagnose(potion, "hidden");
-                // Host: keep the save sane if the game closes now (the stray rescuer returns lost bottles on load).
+                Carry(potion);
+                Diagnose(potion, "carried");
+                // Host: keep the save sane if the game closes now.
                 if (Coop.IsHost)
                     persistence.RecordDropped(potion);
                 return;
             }
 
-            Unpark(potion);
+            // Leaving the other player's hands: from here on the vessel is ours to place.
+            RemoteHeld.Remove(uid);
+            CarryOrder.Remove(uid);
 
             switch (target.Location)
             {
@@ -288,19 +304,29 @@ namespace PotionCoop.Game
                     if (!populator.TryGetSlot(target.Place, out var slot) || slot == null)
                     {
                         CoopMod.Log.Warning($"unknown slot #{target.Place} for #{uid}");
+                        RestoreColliders(potion);
                         return;
                     }
                     if (slot.Potion != null && slot.Potion.Uid != uid)
                         slot.ClearPotion(true);
-                    slot.PlacePotion(potion, true);
-                    if (potion.transform.parent != slot.PotionMount)
-                        potion.BeginFlyToSlot(slot.PotionMount, true);
-                    persistence.RecordShelved(potion, slot);
-                    Diagnose(potion, $"shelved in #{slot.Uid}");
+                    void Shelve()
+                    {
+                        RestoreColliders(potion);
+                        slot.PlacePotion(potion, true);
+                        if (potion.transform.parent != slot.PotionMount)
+                            potion.BeginFlyToSlot(slot.PotionMount, true);
+                        persistence.RecordShelved(potion, slot);
+                        Diagnose(potion, $"shelved in #{slot.Uid}");
+                    }
+                    if (fromHand)
+                        Fly(potion, slot.PotionMount.position, slot.PotionMount.rotation, Shelve);
+                    else
+                        Shelve();
                     break;
 
                 case NetLocation.Holder:
                     var holder = FindHolder(target.Place);
+                    RestoreColliders(potion);
                     if (holder == null)
                     {
                         CoopMod.Log.Warning($"unknown holder {target.Place} for #{uid}");
@@ -312,13 +338,31 @@ namespace PotionCoop.Game
 
                 case NetLocation.Floor:
                     var pos = target.Pos != null ? ToVector(target.Pos) : potion.transform.position;
-                    var rot = target.Rot != null ? new Quaternion(target.Rot[0], target.Rot[1], target.Rot[2], target.Rot[3]) : potion.transform.rotation;
-                    DropAt(potion, pos, rot);
-                    persistence.RecordDropped(potion);
+                    var rot = target.Rot != null ? ToRotation(target.Rot) : potion.transform.rotation;
+                    var falling = target.Falling;
+                    void Land()
+                    {
+                        RestoreColliders(potion);
+                        DropAt(potion, pos, rot);
+                        if (falling)
+                        {
+                            // Still falling on the other side: let our physics drop it too; the rest pose follows.
+                            potion.Unfreeze();
+                            Falling.Add(uid);
+                        }
+                        else
+                            Falling.Remove(uid);
+                        persistence.RecordDropped(potion);
+                    }
+                    if (fromHand)
+                        Fly(potion, pos, rot, Land);
+                    else
+                        Land();
                     break;
 
                 default:
                     // HeldBySelf for a vessel not in our hands: the other side thinks we hold it. Drop it at our feet.
+                    RestoreColliders(potion);
                     var hero = GameRefs.Hero;
                     var feet = hero != null ? hero.Position + Vector3.up * 0.3f : potion.transform.position;
                     DropAt(potion, feet, potion.transform.rotation);
@@ -327,51 +371,46 @@ namespace PotionCoop.Game
             }
         }
 
-        // ---- hiding remote-held vessels ----
-        // A vessel in the other player's hands stays where it was, frozen, with its renderers and colliders off:
-        // invisible, impossible to aim at, and nothing in the game thinks it fell out of the world.
+        // ---- vessels in the other player's hands ----
+        // They stay visible and float in front of the ghost (as if carried), frozen and with colliders off,
+        // so nobody can aim at them and nothing in the game thinks they fell out of the world.
 
-        static readonly Dictionary<int, List<Component>> Hidden = new();
+        static readonly Dictionary<int, List<Collider>> CollidersOff = new();
+        static readonly List<int> CarryOrder = new();
+        /// <summary>Bottles we let fall with physics because they were still falling on the other side.</summary>
+        static readonly HashSet<int> Falling = new();
 
-        static void Park(PotionFacade potion)
+        static void Carry(PotionFacade potion)
         {
             var uid = potion.Uid;
-            if (Hidden.ContainsKey(uid))
-                return;
+            Falling.Remove(uid);
             potion.Freeze();
-            var switched = new List<Component>();
-            foreach (var renderer in potion.GetComponentsInChildren<Renderer>(false))
-                if (renderer.enabled)
-                {
-                    renderer.enabled = false;
-                    switched.Add(renderer);
-                }
+            DisableColliders(potion);
+            if (RemoteHeld.Add(uid))
+                CarryOrder.Add(uid);
+        }
+
+        static void DisableColliders(PotionFacade potion)
+        {
+            if (CollidersOff.ContainsKey(potion.Uid))
+                return;
+            var switched = new List<Collider>();
             foreach (var collider in potion.GetComponentsInChildren<Collider>(false))
                 if (collider.enabled)
                 {
                     collider.enabled = false;
                     switched.Add(collider);
                 }
-            Hidden[uid] = switched;
+            CollidersOff[potion.Uid] = switched;
         }
 
-        static void Unpark(PotionFacade potion)
+        static void RestoreColliders(PotionFacade potion)
         {
-            var uid = potion.Uid;
-            RemoteHeld.Remove(uid);
-            if (!Hidden.Remove(uid, out var switched))
+            if (!CollidersOff.Remove(potion.Uid, out var switched))
                 return;
-            foreach (var component in switched)
-            {
-                if (component == null)
-                    continue;
-                var renderer = component.TryCast<Renderer>();
-                if (renderer != null)
-                    renderer.enabled = true;
-                var collider = component.TryCast<Collider>();
+            foreach (var collider in switched)
                 if (collider != null)
                     collider.enabled = true;
-            }
         }
 
         /// <summary>Puts a vessel on the floor at an exact resting pose.</summary>
@@ -403,6 +442,101 @@ namespace PotionCoop.Game
             Diagnose(potion, path);
         }
 
+        // ---- motion: carried bottles follow the ghost, placed bottles fly out of its hands ----
+
+        sealed class Flight
+        {
+            public PotionFacade Potion;
+            public int Uid;
+            public Vector3 FromPos, ToPos;
+            public Quaternion FromRot, ToRot;
+            public float Start, Duration;
+            public Action Done;
+        }
+
+        static readonly List<Flight> Flights = new();
+
+        static void Fly(PotionFacade potion, Vector3 toPos, Quaternion toRot, Action done)
+        {
+            var t = potion.transform;
+            var distance = Vector3.Distance(t.position, toPos);
+            Flights.Add(new Flight
+            {
+                Potion = potion,
+                Uid = potion.Uid,
+                FromPos = t.position,
+                FromRot = t.rotation,
+                ToPos = toPos,
+                ToRot = toRot,
+                Start = Time.realtimeSinceStartup,
+                Duration = Mathf.Clamp(0.18f + distance * 0.12f, 0.2f, 0.6f),
+                Done = done,
+            });
+        }
+
+        static void FinishFlight(int uid)
+        {
+            var i = Flights.FindIndex(f => f.Uid == uid);
+            if (i < 0)
+                return;
+            var flight = Flights[i];
+            Flights.RemoveAt(i);
+            Complete(flight);
+        }
+
+        static void Complete(Flight flight)
+        {
+            if (flight.Potion == null)
+                return;
+            flight.Potion.transform.SetPositionAndRotation(flight.ToPos, flight.ToRot);
+            AsApplying(() =>
+            {
+                try { flight.Done(); }
+                catch (Exception e) { CoopMod.Log.Error($"placing #{flight.Uid} failed: {e.Message}"); }
+            });
+        }
+
+        /// <summary>Every frame: move carried bottles with the ghost and advance flights.</summary>
+        public static void TickMotion(Ghost ghost, float dt)
+        {
+            if (ghost != null && ghost.Alive && CarryOrder.Count > 0)
+            {
+                var populator = GameRefs.Populator;
+                var follow = 1f - Mathf.Exp(-14f * dt);
+                for (var i = 0; i < CarryOrder.Count; i++)
+                {
+                    if (!populator.TryGetPotion(CarryOrder[i], out var potion) || potion == null)
+                        continue;
+                    var (pos, rot) = ghost.CarryPose(i, CarryOrder.Count);
+                    var t = potion.transform;
+                    t.SetPositionAndRotation(Vector3.Lerp(t.position, pos, follow), Quaternion.Slerp(t.rotation, rot, follow));
+                }
+            }
+
+            var now = Time.realtimeSinceStartup;
+            for (var i = Flights.Count - 1; i >= 0; i--)
+            {
+                var flight = Flights[i];
+                if (flight.Potion == null)
+                {
+                    Flights.RemoveAt(i);
+                    continue;
+                }
+                var p = Mathf.Clamp01((now - flight.Start) / flight.Duration);
+                if (p >= 1f)
+                {
+                    Flights.RemoveAt(i);
+                    Complete(flight);
+                    continue;
+                }
+                var eased = p * p * (3f - 2f * p);
+                var arc = Mathf.Sin(p * Mathf.PI) * Mathf.Min(0.3f, Vector3.Distance(flight.FromPos, flight.ToPos) * 0.25f);
+                flight.Potion.transform.SetPositionAndRotation(
+                    Vector3.Lerp(flight.FromPos, flight.ToPos, eased) + Vector3.up * arc,
+                    Quaternion.Slerp(flight.FromRot, flight.ToRot, eased));
+            }
+        }
+
         // ---- diagnostics: what really happened to the first applied vessels ----
 
         static int _diagnosed;
@@ -421,7 +555,10 @@ namespace PotionCoop.Game
         public static void ResetLevel()
         {
             RemoteHeld.Clear();
-            Hidden.Clear();
+            CarryOrder.Clear();
+            CollidersOff.Clear();
+            Falling.Clear();
+            Flights.Clear();
             Checks.Clear();
             _vats = null;
             _holders = null;
@@ -444,16 +581,18 @@ namespace PotionCoop.Game
         {
             var t = potion.transform;
             var parent = t.parent != null ? t.parent.name : "-";
-            return $"pos={t.position} carry={potion.CarryState.Value} parent={parent} hidden={Hidden.ContainsKey(potion.Uid)}";
+            return $"pos={t.position} carry={potion.CarryState.Value} parent={parent} carried={RemoteHeld.Contains(potion.Uid)}";
         }
 
         /// <summary>The other player left: put whatever they held down where their ghost stood.</summary>
         public static void DropRemoteHeld(Vector3 at)
         {
             var populator = GameRefs.Populator;
+            foreach (var flight in Flights.ToList())
+                FinishFlight(flight.Uid);
             if (populator == null || RemoteHeld.Count == 0)
                 return;
-            var states = RemoteHeld.Select((uid, i) =>
+            var states = CarryOrder.Select((uid, i) =>
             {
                 populator.TryGetPotion(uid, out var potion);
                 var spot = at + new Vector3((i % 3) * 0.15f, 0.3f, (i / 3) * 0.15f);
@@ -464,10 +603,14 @@ namespace PotionCoop.Game
                     Pos = new[] { spot.x, spot.y, spot.z },
                     Rot = new[] { 0f, 0f, 0f, 1f },
                     Units = potion != null ? ReadUnits(potion.Contents._units) : new byte[0],
+                    Falling = true,
                 };
             }).ToList();
             Apply(states, null);
+            foreach (var flight in Flights.ToList())
+                FinishFlight(flight.Uid);
             RemoteHeld.Clear();
+            CarryOrder.Clear();
         }
     }
 }

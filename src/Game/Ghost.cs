@@ -4,65 +4,130 @@ using Object = UnityEngine.Object;
 namespace PotionCoop.Game
 {
     /// <summary>
-    /// The other player's body: plain primitives (no colliders, no injected components),
-    /// moved every frame from <see cref="Coop"/> towards the last received pose.
+    /// The other player's body: a little alchemist built from simple shapes (robe, head, pointy hat, hands),
+    /// with no colliders and no injected components. Moved every frame from <see cref="Coop"/>.
     /// </summary>
     internal sealed class Ghost
     {
-        const float BodyHeight = 1.5f;
-        const float EyeHeight = 1.6f;
+        const float HeadHeight = 1.47f;
+        static readonly Color Skin = new(0.96f, 0.80f, 0.66f);
 
         readonly GameObject _root;
+        readonly Transform _body;
         readonly Transform _head;
         Vector3 _targetPos;
         float _targetYaw;
         float _targetPitch;
         float _yaw;
         float _pitch;
+        float _speed;
+        float _walkPhase;
 
         public string Name;
         public bool InMenu;
         public int Held;
         public Vector3 Position => _root.transform.position;
-        public Vector3 LabelAnchor => _root.transform.position + Vector3.up * (EyeHeight + 0.35f);
+        public Vector3 LabelAnchor => _root.transform.position + Vector3.up * 2.25f;
         public bool Alive => _root != null;
 
         public Ghost(Color color, Vector3 position)
         {
-            var material = MakeMaterial(color);
+            var robe = MakeMaterial(color);
+            var trim = MakeMaterial(color * 0.55f);
+            var skin = MakeMaterial(Skin);
+            var dark = MakeMaterial(new Color(0.08f, 0.06f, 0.05f));
 
             _root = new GameObject("PotionCoop.Ghost");
             Object.DontDestroyOnLoad(_root);
             _root.transform.position = position;
 
-            var body = Primitive(PrimitiveType.Capsule, _root.transform, material);
-            body.transform.localPosition = Vector3.up * (BodyHeight / 2f);
-            body.transform.localScale = new Vector3(0.55f, BodyHeight / 2f, 0.55f);
+            // Everything below the root bobs while walking.
+            _body = new GameObject("Body").transform;
+            _body.SetParent(_root.transform, false);
+
+            Mesh("Robe", _body, Frustum(0.38f, 0.17f, 1.25f), robe, Vector3.zero, Quaternion.identity, Vector3.one);
+            Shape(PrimitiveType.Sphere, "Shoulders", _body, trim, new Vector3(0f, 1.22f, 0f), new Vector3(0.44f, 0.16f, 0.40f));
+            Shape(PrimitiveType.Cylinder, "Belt", _body, trim, new Vector3(0f, 0.78f, 0f), new Vector3(0.53f, 0.035f, 0.53f));
+            Shape(PrimitiveType.Sphere, "HandL", _body, skin, new Vector3(-0.21f, 0.98f, 0.2f), Vector3.one * 0.1f);
+            Shape(PrimitiveType.Sphere, "HandR", _body, skin, new Vector3(0.21f, 0.98f, 0.2f), Vector3.one * 0.1f);
 
             _head = new GameObject("Head").transform;
-            _head.SetParent(_root.transform, false);
-            _head.localPosition = Vector3.up * EyeHeight;
+            _head.SetParent(_body, false);
+            _head.localPosition = Vector3.up * HeadHeight;
 
-            var skull = Primitive(PrimitiveType.Sphere, _head, material);
-            skull.transform.localScale = Vector3.one * 0.38f;
-
-            // A short "nose" so you can tell where they are looking.
-            var nose = Primitive(PrimitiveType.Cube, _head, MakeMaterial(Color.white));
-            nose.transform.localPosition = new Vector3(0f, 0f, 0.25f);
-            nose.transform.localScale = new Vector3(0.08f, 0.08f, 0.22f);
+            Shape(PrimitiveType.Sphere, "Face", _head, skin, Vector3.zero, Vector3.one * 0.34f);
+            Shape(PrimitiveType.Sphere, "EyeL", _head, dark, new Vector3(-0.065f, 0.03f, 0.155f), Vector3.one * 0.05f);
+            Shape(PrimitiveType.Sphere, "EyeR", _head, dark, new Vector3(0.065f, 0.03f, 0.155f), Vector3.one * 0.05f);
+            Shape(PrimitiveType.Sphere, "Nose", _head, skin, new Vector3(0f, -0.02f, 0.17f), Vector3.one * 0.06f);
+            Shape(PrimitiveType.Cylinder, "Brim", _head, trim, new Vector3(0f, 0.12f, 0f), new Vector3(0.5f, 0.012f, 0.5f));
+            Mesh("Hat", _head, Frustum(0.17f, 0.012f, 0.46f), robe, new Vector3(0f, 0.12f, -0.01f),
+                Quaternion.Euler(-12f, 0f, 0f), Vector3.one);
 
             _targetPos = position;
         }
 
-        static GameObject Primitive(PrimitiveType type, Transform parent, Material material)
+        // ---- construction helpers ----
+
+        static void Shape(PrimitiveType type, string name, Transform parent, Material material, Vector3 localPos, Vector3 scale)
         {
             var go = GameObject.CreatePrimitive(type);
+            go.name = name;
             var collider = go.GetComponent<Collider>();
             if (collider != null)
                 Object.Destroy(collider);
             go.GetComponent<Renderer>().sharedMaterial = material;
             go.transform.SetParent(parent, false);
-            return go;
+            go.transform.localPosition = localPos;
+            go.transform.localScale = scale;
+        }
+
+        static void Mesh(string name, Transform parent, Mesh mesh, Material material, Vector3 localPos, Quaternion localRot, Vector3 scale)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = localPos;
+            go.transform.localRotation = localRot;
+            go.transform.localScale = scale;
+            go.AddComponent<MeshFilter>().sharedMesh = mesh;
+            go.AddComponent<MeshRenderer>().sharedMaterial = material;
+        }
+
+        /// <summary>A capped cone/frustum standing on y = 0.</summary>
+        static Mesh Frustum(float bottomRadius, float topRadius, float height, int segments = 24)
+        {
+            var vertices = new Vector3[segments * 2 + 2];
+            var triangles = new int[segments * 12];
+            for (var i = 0; i < segments; i++)
+            {
+                var a = i * Mathf.PI * 2f / segments;
+                var dir = new Vector3(Mathf.Sin(a), 0f, Mathf.Cos(a));
+                vertices[i] = dir * bottomRadius;
+                vertices[segments + i] = dir * topRadius + Vector3.up * height;
+            }
+            var bottomCenter = segments * 2;
+            var topCenter = bottomCenter + 1;
+            vertices[bottomCenter] = Vector3.zero;
+            vertices[topCenter] = Vector3.up * height;
+
+            var t = 0;
+            for (var i = 0; i < segments; i++)
+            {
+                var next = (i + 1) % segments;
+                // side
+                triangles[t++] = i; triangles[t++] = segments + i; triangles[t++] = next;
+                triangles[t++] = next; triangles[t++] = segments + i; triangles[t++] = segments + next;
+                // bottom cap
+                triangles[t++] = bottomCenter; triangles[t++] = i; triangles[t++] = next;
+                // top cap
+                triangles[t++] = topCenter; triangles[t++] = segments + next; triangles[t++] = segments + i;
+            }
+
+            var mesh = new Mesh();
+            mesh.vertices = vertices;
+            mesh.triangles = triangles;
+            mesh.RecalculateNormals();
+            mesh.RecalculateBounds();
+            return mesh;
         }
 
         static Material MakeMaterial(Color color)
@@ -85,13 +150,18 @@ namespace PotionCoop.Game
             material.color = color;
             if (material.HasProperty("_BaseColor"))
                 material.SetColor("_BaseColor", color);
+            if (material.HasProperty("_Smoothness"))
+                material.SetFloat("_Smoothness", 0.25f);
             if (material.HasProperty("_EmissionColor"))
             {
+                // The hall is dim; a faint glow keeps the other player easy to spot.
                 material.EnableKeyword("_EMISSION");
-                material.SetColor("_EmissionColor", color * 0.4f);
+                material.SetColor("_EmissionColor", color * 0.18f);
             }
             return material;
         }
+
+        // ---- per frame ----
 
         public void SetTarget(Vector3 position, float yaw, float pitch)
         {
@@ -102,14 +172,36 @@ namespace PotionCoop.Game
 
         public void Tick(float dt)
         {
+            if (dt <= 0f)
+                return;
             var t = 1f - Mathf.Exp(-15f * dt);
             var pos = _root.transform.position;
             // Snap if far (teleport, reconnect) instead of sliding across the hall.
-            _root.transform.position = (pos - _targetPos).sqrMagnitude > 25f ? _targetPos : Vector3.Lerp(pos, _targetPos, t);
+            var next = (pos - _targetPos).sqrMagnitude > 25f ? _targetPos : Vector3.Lerp(pos, _targetPos, t);
+            var flat = next - pos;
+            flat.y = 0f;
+            _speed = Mathf.Lerp(_speed, flat.magnitude / dt, 1f - Mathf.Exp(-8f * dt));
+            _root.transform.position = next;
+
             _yaw = Mathf.LerpAngle(_yaw, _targetYaw, t);
-            _pitch = Mathf.LerpAngle(_pitch, _targetPitch, t);
+            _pitch = Mathf.LerpAngle(_pitch, Mathf.Clamp(_targetPitch, -35f, 35f), t);
             _root.transform.rotation = Quaternion.Euler(0f, _yaw, 0f);
             _head.localRotation = Quaternion.Euler(_pitch, 0f, 0f);
+
+            // A little waddle while walking.
+            var walk = Mathf.Clamp01(_speed / 3f);
+            _walkPhase += dt * (6f + _speed * 2.5f);
+            _body.localPosition = Vector3.up * (Mathf.Abs(Mathf.Sin(_walkPhase)) * 0.05f * walk);
+            _body.localRotation = Quaternion.Euler(0f, 0f, Mathf.Sin(_walkPhase) * 4f * walk);
+        }
+
+        /// <summary>Where the i-th of n carried bottles floats: in front of the chest, side by side.</summary>
+        public (Vector3 position, Quaternion rotation) CarryPose(int index, int count)
+        {
+            var root = _root.transform;
+            var spread = (index - (count - 1) / 2f) * 0.13f;
+            var position = _body.position + Vector3.up * 0.92f + root.forward * 0.36f + root.right * spread;
+            return (position, root.rotation);
         }
 
         public void Destroy()

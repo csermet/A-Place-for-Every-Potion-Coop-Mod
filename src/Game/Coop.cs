@@ -30,6 +30,7 @@ namespace PotionCoop.Game
         static readonly HashSet<int> DirtyPotions = new();
         static readonly HashSet<int> DirtyVats = new();
         static readonly Dictionary<int, float> PendingSettle = new();
+        static readonly HashSet<int> SentFalling = new();
         static HashSet<int> _lastHeld = new();
 
         // world messages wait here while the level is loading
@@ -60,6 +61,8 @@ namespace PotionCoop.Game
         public static string Status { get; private set; } = "kapalı";
         public static string RemoteName => _remoteName;
         public static double PingMs { get; private set; } = -1;
+        /// <summary>Client: the host's vat capacities (they follow the host's skills, see <see cref="VatCapacityPatch"/>).</summary>
+        public static readonly Dictionary<int, int> HostVatCapacity = new();
         /// <summary>null = unknown, true = worlds match, false = healing.</summary>
         public static bool? InSync { get; private set; }
         public static Ghost Ghost => _ghost;
@@ -143,6 +146,8 @@ namespace PotionCoop.Game
             DirtyPotions.Clear();
             DirtyVats.Clear();
             PendingSettle.Clear();
+            SentFalling.Clear();
+            HostVatCapacity.Clear();
             Array.Clear(MismatchStreak, 0, MismatchStreak.Length);
             _ghost?.Destroy();
             _ghost = null;
@@ -184,6 +189,7 @@ namespace PotionCoop.Game
 
                 ScanStep();
                 _ghost?.Tick(Time.unscaledDeltaTime);
+                World.TickMotion(_ghost, Time.unscaledDeltaTime);
                 World.TickDiagnostics();
             }
             else if (_ghost != null && !GameRefs.InLevel)
@@ -319,7 +325,11 @@ namespace PotionCoop.Game
                     break;
 
                 case "d" when !IsHost:
-                    CompareDigest(body.ToObject<DigestMsg>().Buckets);
+                    var digest = body.ToObject<DigestMsg>();
+                    if (digest.VatCapacity != null)
+                        foreach (var pair in digest.VatCapacity)
+                            HostVatCapacity[pair.Key] = pair.Value;
+                    CompareDigest(digest.Buckets);
                     break;
             }
         }
@@ -405,11 +415,20 @@ namespace PotionCoop.Game
                     continue;
                 }
                 var state = World.Read(populator, potion, held);
-                // A dropped bottle is still flying or rolling: wait until it rests so we send where it ends up.
                 if (state.Location == NetLocation.Floor && potion.CarryState.Value != ePotionCarryState.Idle
                     && Now - PendingSettle[uid] < SettleTimeout)
+                {
+                    // Just dropped and still falling: tell the other side right away (it lets the bottle fall too),
+                    // then keep watching and send where it finally comes to rest.
+                    if (SentFalling.Add(uid))
+                    {
+                        state.Falling = true;
+                        msg.Potions.Add(state);
+                    }
                     continue;
+                }
                 PendingSettle.Remove(uid);
+                SentFalling.Remove(uid);
                 msg.Potions.Add(state);
             }
 
@@ -522,7 +541,11 @@ namespace PotionCoop.Game
             _scanIndex = -1;
             _nextScan = Now + DigestInterval;
             if (IsHost)
-                _session.Send(new DigestMsg { Buckets = _myDigest });
+                _session.Send(new DigestMsg
+                {
+                    Buckets = _myDigest,
+                    VatCapacity = World.Vats().ToDictionary(v => v.Uid, v => v.Capacity),
+                });
             if (Now >= _nextScanReport)
             {
                 _nextScanReport = Now + 60f;

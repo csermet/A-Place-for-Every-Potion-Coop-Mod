@@ -3,6 +3,7 @@ using Il2Cpp;
 using Il2CppCodeBase.Components.Cat;
 using Il2CppCodeBase.Components.Hero;
 using Il2CppCodeBase.Components.Potions;
+using Il2CppCodeBase.Components.Vats;
 using Il2CppCodeBase.Services.GameStateMachineService;
 using Il2CppCodeBase.Services.PotionsPersistenceService;
 using Il2CppCodeBase.Services.SaveLoadService;
@@ -77,6 +78,35 @@ namespace PotionCoop
                 return true;
             __result = false;
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Vat capacity comes from the owner's skills (Greater Vat). The vats are shared, so on the client
+    /// they take the host's capacity; the friend's own skills and points stay untouched.
+    /// </summary>
+    [HarmonyPatch(typeof(VatConfigResolver), nameof(VatConfigResolver.Capacity), MethodType.Getter)]
+    static class VatCapacityPatch
+    {
+        static void Postfix(VatConfigResolver __instance, ref int __result)
+        {
+            if (!Coop.IsConnected || Coop.IsHost || Coop.HostVatCapacity.Count == 0)
+                return;
+            var vat = __instance.GetComponent<VatFacade>();
+            if (vat != null && Coop.HostVatCapacity.TryGetValue(vat.Uid, out var capacity))
+                __result = capacity;
+        }
+    }
+
+    [HarmonyPatch(typeof(VatFacade), nameof(VatFacade.Capacity), MethodType.Getter)]
+    static class VatFacadeCapacityPatch
+    {
+        static void Postfix(VatFacade __instance, ref int __result)
+        {
+            if (!Coop.IsConnected || Coop.IsHost)
+                return;
+            if (Coop.HostVatCapacity.TryGetValue(__instance.Uid, out var capacity))
+                __result = capacity;
         }
     }
 
