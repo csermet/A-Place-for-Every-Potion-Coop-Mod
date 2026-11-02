@@ -1,224 +1,111 @@
 using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
-using HarmonyLib;
-using Il2Cpp;
-using Il2CppCodeBase.Components.Hero;
-using Il2CppCodeBase.Components.Lab;
-using Il2CppCodeBase.Components.Potions;
-using Il2CppCodeBase.Components.Slots;
-using Il2CppCodeBase.Components.Vats;
-using Il2CppCodeBase.Services.GameStateMachineService;
-using Il2CppCodeBase.Services.PotionsPersistenceService;
-using Il2CppCodeBase.Services.SaveLoadService;
 using MelonLoader;
+using PotionCoop.Game;
 using UnityEngine;
 using UnityEngine.InputSystem;
-using Object = UnityEngine.Object;
 
-[assembly: MelonInfo(typeof(PotionCoop.CoopMod), "PotionCoop", "0.0.1", "caner")]
+[assembly: MelonInfo(typeof(PotionCoop.CoopMod), "PotionCoop", PotionCoop.Net.Protocol.ModVersion, "caner")]
 [assembly: MelonGame("CubeQuad", "A Place for Every Potion")]
 
 namespace PotionCoop
 {
+    /// <summary>
+    /// Entry point. Hotkeys (hold Ctrl):
+    ///   F8 host on/off · F9 join (from the main menu) · F10 resync · F11 leave · F12 hide/show panel
+    /// </summary>
     public class CoopMod : MelonMod
     {
         internal static MelonLogger.Instance Log;
-        internal static readonly Stopwatch Clock = Stopwatch.StartNew();
-
-        HeroFacade _hero;
-        LabPotionsPopulator _populator;
-        WorldSnapshot _snapshot;
-        bool _loggedFirstUpdate;
-        bool _loggedNoKeyboard;
-        bool _legacyInputBroken;
+        bool _showPanel = true;
 
         public override void OnInitializeMelon()
         {
             Log = LoggerInstance;
-            Log.Msg("PotionCoop loaded (phase 1 probe)");
+            Settings.Init();
+            Log.Msg($"PotionCoop {Net.Protocol.ModVersion} ready — Ctrl+F8 host, Ctrl+F9 join");
         }
 
         public override void OnUpdate()
         {
-            if (!_loggedFirstUpdate)
-            {
-                _loggedFirstUpdate = true;
-                Log.Msg($"[probe] OnUpdate alive {Stamp()}");
-            }
-
-            if (Pressed(Key.F7, KeyCode.F7))
-                DumpHero();
-            else if (Pressed(Key.F5, KeyCode.F5))
-                TakeSnapshot();
-            else if (Pressed(Key.F6, KeyCode.F6))
-                RestoreSnapshot();
+            HandleHotkeys();
+            try { Coop.Update(); }
+            catch (Exception e) { Log.Error($"update: {e}"); }
         }
 
-        // Ctrl+key. Tries the new Input System first, then legacy Input as a fallback, and logs which one fired.
-        bool Pressed(Key key, KeyCode legacy)
+        public override void OnLateUpdate()
+        {
+            try { Coop.LateUpdate(); }
+            catch (Exception e) { Log.Error($"late update: {e}"); }
+        }
+
+        public override void OnDeinitializeMelon() => Coop.Stop();
+
+        void HandleHotkeys()
         {
             var kb = Keyboard.current;
-            if (kb == null)
+            if (kb == null || !kb.ctrlKey.isPressed)
+                return;
+
+            if (kb.f8Key.wasPressedThisFrame)
             {
-                if (!_loggedNoKeyboard)
+                if (Coop.IsRunning && Coop.IsHost)
+                    Coop.Stop();
+                else
+                    Coop.StartHost();
+            }
+            else if (kb.f9Key.wasPressedThisFrame)
+                Coop.Join();
+            else if (kb.f10Key.wasPressedThisFrame)
+                Coop.ForceResync();
+            else if (kb.f11Key.wasPressedThisFrame)
+                Coop.Stop();
+            else if (kb.f12Key.wasPressedThisFrame)
+                _showPanel = !_showPanel;
+        }
+
+        public override void OnGUI()
+        {
+            if (_showPanel)
+                DrawPanel();
+            DrawGhostLabel();
+        }
+
+        static void DrawPanel()
+        {
+            var role = !Coop.IsRunning ? "" : Coop.IsHost ? "HOST · " : "KATILIMCI · ";
+            var text = $"PotionCoop  {role}{Coop.Status}";
+            if (Coop.IsConnected)
+            {
+                text += Coop.PingMs >= 0 ? $"  ·  ping {Coop.PingMs:F0} ms" : "";
+                text += Coop.InSync switch
                 {
-                    _loggedNoKeyboard = true;
-                    Log.Msg("[probe] Keyboard.current is null");
-                }
+                    true => "  ·  senkron ✓",
+                    false => "  ·  senkronlanıyor…",
+                    _ => "",
+                };
             }
-            else if (kb[key].wasPressedThisFrame)
-            {
-                var ctrl = kb.ctrlKey.isPressed;
-                Log.Msg($"[probe] InputSystem saw {key} (ctrl={ctrl})");
-                return ctrl;
-            }
+            else if (!Coop.IsRunning)
+                text += "   (Ctrl+F8 host · Ctrl+F9 katıl · Ctrl+F12 gizle)";
 
-            if (_legacyInputBroken)
-                return false;
-            try
-            {
-                if (Input.GetKeyDown(legacy))
-                {
-                    var ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
-                    Log.Msg($"[probe] legacy Input saw {legacy} (ctrl={ctrl})");
-                    return ctrl;
-                }
-            }
-            catch (Exception e)
-            {
-                _legacyInputBroken = true;
-                Log.Msg($"[probe] legacy Input unavailable: {e.GetType().Name}");
-            }
-            return false;
+            var width = Mathf.Min(Screen.width - 20, 760);
+            GUI.Box(new Rect((Screen.width - width) / 2f, 6, width, 26), text);
         }
 
-        bool EnsurePopulator()
+        static void DrawGhostLabel()
         {
-            if (_populator == null)
-                _populator = WorldState.FindPopulator();
-            if (_populator == null || !_populator.IsPopulated)
-            {
-                Log.Msg("[probe] level not loaded");
-                return false;
-            }
-            return true;
-        }
-
-        void TakeSnapshot()
-        {
-            if (!EnsurePopulator())
+            var ghost = Coop.Ghost;
+            var camera = Camera.main;
+            if (ghost == null || !ghost.Alive || camera == null)
                 return;
-            var sw = Stopwatch.StartNew();
-            _snapshot = WorldState.Capture(_populator);
-            Log.Msg($"[probe] snapshot taken in {sw.ElapsedMilliseconds} ms: {WorldState.Summary(_snapshot)}");
-        }
-
-        void RestoreSnapshot()
-        {
-            if (_snapshot == null)
-            {
-                Log.Msg("[probe] no snapshot (press Ctrl+F5 first)");
+            var screen = camera.WorldToScreenPoint(ghost.LabelAnchor);
+            if (screen.z <= 0f)
                 return;
-            }
-            if (!EnsurePopulator())
-                return;
-            var sw = Stopwatch.StartNew();
-            try
-            {
-                WorldState.Apply(_populator, _snapshot);
-            }
-            catch (Exception e)
-            {
-                Log.Error($"[probe] apply failed: {e}");
-            }
-            var after = WorldState.Capture(_populator);
-            var off = _snapshot.Potions.Values.Count(t =>
-                after.Potions.TryGetValue(t.Uid, out var a) && (!t.SamePlace(a) || !t.SameUnits(a)));
-            Log.Msg($"[probe] restore took {sw.ElapsedMilliseconds} ms; still different: {off}; now {WorldState.Summary(after)}");
+            var label = ghost.Name;
+            if (ghost.Held > 0)
+                label += $"  ({ghost.Held} şişe)";
+            if (ghost.InMenu)
+                label += "  · menüde";
+            GUI.Label(new Rect(screen.x - 110, Screen.height - screen.y - 12, 220, 24), label);
         }
-
-        void DumpHero()
-        {
-            if (_hero == null)
-                _hero = Object.FindFirstObjectByType<HeroFacade>();
-            if (_populator == null)
-                _populator = Object.FindFirstObjectByType<LabPotionsPopulator>();
-
-            if (_hero == null)
-            {
-                Log.Msg("[probe] HeroFacade not found (not in a level?)");
-                return;
-            }
-
-            var look = _hero.Look;
-            Log.Msg($"[probe] hero pos={_hero.Position} yaw={look._yaw:F1} pitch={look._pitch:F1} " +
-                    $"potions={(_populator != null ? _populator.PotionCount : -1)}");
-        }
-
-        internal static string Stamp() => $"t={Clock.Elapsed.TotalSeconds:F2}s";
-
-        internal static string Describe(PotionFacade potion)
-        {
-            if (potion == null)
-                return "null";
-            return $"#{potion.Uid} carry={potion.CarryState.Value} pos={potion.transform.position}";
-        }
-    }
-
-    [HarmonyPatch(typeof(GameStateMachine), nameof(GameStateMachine.Enter), new[] { typeof(eGameState) })]
-    static class GameStateEnterProbe
-    {
-        static void Postfix(eGameState __0) => CoopMod.Log.Msg($"[probe] state -> {__0} {CoopMod.Stamp()}");
-    }
-
-    // Tells us when (boot vs. level load) the game reads each save key.
-    [HarmonyPatch(typeof(SaveLoadService), nameof(SaveLoadService.KeyToFilePath))]
-    static class KeyToFilePathProbe
-    {
-        static readonly HashSet<string> Seen = new();
-
-        static void Postfix(string __0, string __result)
-        {
-            if (Seen.Add(__0))
-                CoopMod.Log.Msg($"[probe] KeyToFilePath '{__0}' -> {__result} {CoopMod.Stamp()}");
-        }
-    }
-
-    [HarmonyPatch(typeof(PotionsPersistence))]
-    static class PersistenceProbe
-    {
-        [HarmonyPostfix, HarmonyPatch(nameof(PotionsPersistence.RecordDropped))]
-        static void Dropped(PotionFacade __0) => CoopMod.Log.Msg($"[probe] RecordDropped {CoopMod.Describe(__0)}");
-
-        [HarmonyPostfix, HarmonyPatch(nameof(PotionsPersistence.RecordPlaced))]
-        static void Placed(PotionFacade __0) => CoopMod.Log.Msg($"[probe] RecordPlaced {CoopMod.Describe(__0)}");
-
-        [HarmonyPostfix, HarmonyPatch(nameof(PotionsPersistence.RecordShelved))]
-        static void Shelved(PotionFacade __0, SlotFacade __1) =>
-            CoopMod.Log.Msg($"[probe] RecordShelved {CoopMod.Describe(__0)} slot=#{(__1 != null ? __1.Uid : 0)}");
-
-        [HarmonyPostfix, HarmonyPatch(nameof(PotionsPersistence.RecordHandRow))]
-        static void HandRow() => CoopMod.Log.Msg("[probe] RecordHandRow");
-
-        [HarmonyPostfix, HarmonyPatch(nameof(PotionsPersistence.RecordApronRow))]
-        static void ApronRow() => CoopMod.Log.Msg("[probe] RecordApronRow");
-
-        [HarmonyPostfix, HarmonyPatch(nameof(PotionsPersistence.RecordVat))]
-        static void Vat(VatFacade __0) => CoopMod.Log.Msg("[probe] RecordVat");
-
-        [HarmonyPostfix, HarmonyPatch(nameof(PotionsPersistence.RecordHung))]
-        static void Hung(PotionFacade __0) => CoopMod.Log.Msg($"[probe] RecordHung {CoopMod.Describe(__0)}");
-
-        [HarmonyPostfix, HarmonyPatch(nameof(PotionsPersistence.RecordSeparator))]
-        static void Separator() => CoopMod.Log.Msg("[probe] RecordSeparator");
-
-        [HarmonyPostfix, HarmonyPatch(nameof(PotionsPersistence.TryScoreShelve))]
-        static void Score(PotionFacade __0, bool __result) =>
-            CoopMod.Log.Msg($"[probe] TryScoreShelve {CoopMod.Describe(__0)} -> {__result}");
-
-        [HarmonyPostfix, HarmonyPatch(nameof(PotionsPersistence.Flush))]
-        static void Flush() => CoopMod.Log.Msg($"[probe] Flush {CoopMod.Stamp()}");
     }
 }

@@ -1,0 +1,89 @@
+using HarmonyLib;
+using Il2Cpp;
+using Il2CppCodeBase.Components.Cat;
+using Il2CppCodeBase.Components.Hero;
+using Il2CppCodeBase.Components.Potions;
+using Il2CppCodeBase.Services.GameStateMachineService;
+using Il2CppCodeBase.Services.PotionsPersistenceService;
+using Il2CppCodeBase.Services.SaveLoadService;
+using PotionCoop.Game;
+
+namespace PotionCoop
+{
+    [HarmonyPatch(typeof(GameStateMachine), nameof(GameStateMachine.Enter), new[] { typeof(eGameState) })]
+    static class GameStatePatch
+    {
+        static void Postfix(eGameState __0)
+        {
+            GameRefs.State = __0;
+            if (__0 is eGameState.LoadLevel or eGameState.LoadLobby or eGameState.Lobby)
+                Coop.OnLevelLeft();
+            // Back in the menu without a live co-op link: the client's next game is solo again.
+            if (__0 is eGameState.Lobby && !(Coop.IsRunning && !Coop.IsHost))
+                SavePaths.Deactivate();
+        }
+    }
+
+    /// <summary>Every change the game persists is a change the other player needs.</summary>
+    [HarmonyPatch(typeof(PotionsPersistence))]
+    static class PersistencePatches
+    {
+        [HarmonyPostfix, HarmonyPatch(nameof(PotionsPersistence.RecordHandRow))]
+        static void HandRow() => Coop.MarkHeldRows();
+
+        [HarmonyPostfix, HarmonyPatch(nameof(PotionsPersistence.RecordApronRow))]
+        static void ApronRow() => Coop.MarkHeldRows();
+
+        [HarmonyPostfix, HarmonyPatch(nameof(PotionsPersistence.RecordShelved))]
+        static void Shelved(PotionFacade __0) => Coop.MarkPotion(__0);
+
+        [HarmonyPostfix, HarmonyPatch(nameof(PotionsPersistence.RecordDropped))]
+        static void Dropped(PotionFacade __0) => Coop.MarkPotion(__0);
+
+        [HarmonyPostfix, HarmonyPatch(nameof(PotionsPersistence.RecordPlaced))]
+        static void Placed(PotionFacade __0) => Coop.MarkPotion(__0);
+
+        [HarmonyPostfix, HarmonyPatch(nameof(PotionsPersistence.RecordHung))]
+        static void Hung(PotionFacade __0) => Coop.MarkPotion(__0);
+
+        [HarmonyPostfix, HarmonyPatch(nameof(PotionsPersistence.TryScoreShelve))]
+        static void Scored(PotionFacade __0) => Coop.MarkPotion(__0);
+
+        [HarmonyPostfix, HarmonyPatch(nameof(PotionsPersistence.RecordVat))]
+        static void Vat(Il2CppCodeBase.Components.Vats.VatFacade __0) => Coop.MarkVat(__0);
+    }
+
+    /// <summary>Client: the shared world lives in its own save folder (see <see cref="SavePaths"/>).</summary>
+    [HarmonyPatch(typeof(SaveLoadService))]
+    static class SavePathPatches
+    {
+        [HarmonyPostfix, HarmonyPatch(nameof(SaveLoadService.KeyToFilePath))]
+        static void KeyToFilePath(string __0, ref string __result) => __result = SavePaths.Redirect(__0, __result);
+
+        [HarmonyPostfix, HarmonyPatch(nameof(SaveLoadService.TempFilePath))]
+        static void TempFilePath(string __0, ref string __result) => __result = SavePaths.Redirect(__0, __result);
+
+        [HarmonyPostfix, HarmonyPatch(nameof(SaveLoadService.BackupFilePath))]
+        static void BackupFilePath(string __0, ref string __result) => __result = SavePaths.Redirect(__0, __result);
+    }
+
+    /// <summary>Undo could pull a bottle out of the other player's hands; off while connected.</summary>
+    [HarmonyPatch(typeof(HeroMoveUndoer), nameof(HeroMoveUndoer.TryUndo))]
+    static class UndoPatch
+    {
+        static bool Prefix(ref bool __result)
+        {
+            if (!Coop.IsConnected)
+                return true;
+            __result = false;
+            return false;
+        }
+    }
+
+    /// <summary>The cat knocks bottles over at random; only the host's cat does, and the result is synced.</summary>
+    [HarmonyPatch(typeof(CatBottlePusher), nameof(CatBottlePusher.Knock))]
+    static class CatPatch
+    {
+        static bool Prefix() => !(Coop.IsConnected && !Coop.IsHost);
+    }
+}
