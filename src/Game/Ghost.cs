@@ -36,6 +36,8 @@ namespace PotionCoop.Game
             var trim = MakeMaterial(color * 0.55f);
             var skin = MakeMaterial(Skin);
             var dark = MakeMaterial(new Color(0.08f, 0.06f, 0.05f));
+            var gold = MakeMaterial(new Color(1f, 0.76f, 0.25f), glow: 0.45f);
+            var beard = MakeMaterial(new Color(0.93f, 0.92f, 0.88f));
 
             _root = new GameObject("PotionCoop.Ghost");
             Object.DontDestroyOnLoad(_root);
@@ -48,6 +50,10 @@ namespace PotionCoop.Game
             Mesh("Robe", _body, Frustum(0.38f, 0.17f, 1.25f), robe, Vector3.zero, Quaternion.identity, Vector3.one);
             Shape(PrimitiveType.Sphere, "Shoulders", _body, trim, new Vector3(0f, 1.22f, 0f), new Vector3(0.44f, 0.16f, 0.40f));
             Shape(PrimitiveType.Cylinder, "Belt", _body, trim, new Vector3(0f, 0.78f, 0f), new Vector3(0.53f, 0.035f, 0.53f));
+            Shape(PrimitiveType.Cube, "Buckle", _body, gold, new Vector3(0f, 0.78f, 0.255f), new Vector3(0.09f, 0.07f, 0.02f));
+            // Sleeves run from the shoulders down and forward to the hands.
+            Shape(PrimitiveType.Cylinder, "SleeveL", _body, robe, new Vector3(-0.205f, 1.09f, 0.1f), new Vector3(0.11f, 0.15f, 0.11f), Quaternion.Euler(-42f, 0f, 0f));
+            Shape(PrimitiveType.Cylinder, "SleeveR", _body, robe, new Vector3(0.205f, 1.09f, 0.1f), new Vector3(0.11f, 0.15f, 0.11f), Quaternion.Euler(-42f, 0f, 0f));
             Shape(PrimitiveType.Sphere, "HandL", _body, skin, new Vector3(-0.21f, 0.98f, 0.2f), Vector3.one * 0.1f);
             Shape(PrimitiveType.Sphere, "HandR", _body, skin, new Vector3(0.21f, 0.98f, 0.2f), Vector3.one * 0.1f);
 
@@ -59,16 +65,25 @@ namespace PotionCoop.Game
             Shape(PrimitiveType.Sphere, "EyeL", _head, dark, new Vector3(-0.065f, 0.03f, 0.155f), Vector3.one * 0.05f);
             Shape(PrimitiveType.Sphere, "EyeR", _head, dark, new Vector3(0.065f, 0.03f, 0.155f), Vector3.one * 0.05f);
             Shape(PrimitiveType.Sphere, "Nose", _head, skin, new Vector3(0f, -0.02f, 0.17f), Vector3.one * 0.06f);
+            // A pointy white beard hanging from the chin.
+            Mesh("Beard", _head, Frustum(0.11f, 0.008f, 0.24f), beard, new Vector3(0f, -0.07f, 0.09f),
+                Quaternion.Euler(165f, 0f, 0f), Vector3.one);
             Shape(PrimitiveType.Cylinder, "Brim", _head, trim, new Vector3(0f, 0.12f, 0f), new Vector3(0.5f, 0.012f, 0.5f));
-            Mesh("Hat", _head, Frustum(0.17f, 0.012f, 0.46f), robe, new Vector3(0f, 0.12f, -0.01f),
-                Quaternion.Euler(-12f, 0f, 0f), Vector3.one);
+            var hat = new GameObject("Hat").transform;
+            hat.SetParent(_head, false);
+            hat.localPosition = new Vector3(0f, 0.12f, -0.01f);
+            hat.localRotation = Quaternion.Euler(-12f, 0f, 0f);
+            Mesh("Cone", hat, Frustum(0.17f, 0.012f, 0.46f), robe, Vector3.zero, Quaternion.identity, Vector3.one);
+            Shape(PrimitiveType.Cylinder, "Band", hat, gold, new Vector3(0f, 0.04f, 0f), new Vector3(0.335f, 0.025f, 0.335f));
+            Shape(PrimitiveType.Sphere, "Star", hat, gold, new Vector3(0f, 0.17f, 0.115f), new Vector3(0.07f, 0.07f, 0.02f));
 
             _targetPos = position;
         }
 
         // ---- construction helpers ----
 
-        static void Shape(PrimitiveType type, string name, Transform parent, Material material, Vector3 localPos, Vector3 scale)
+        static void Shape(PrimitiveType type, string name, Transform parent, Material material, Vector3 localPos, Vector3 scale,
+            Quaternion? localRot = null)
         {
             var go = GameObject.CreatePrimitive(type);
             go.name = name;
@@ -78,6 +93,7 @@ namespace PotionCoop.Game
             go.GetComponent<Renderer>().sharedMaterial = material;
             go.transform.SetParent(parent, false);
             go.transform.localPosition = localPos;
+            go.transform.localRotation = localRot ?? Quaternion.identity;
             go.transform.localScale = scale;
         }
 
@@ -130,7 +146,7 @@ namespace PotionCoop.Game
             return mesh;
         }
 
-        static Material MakeMaterial(Color color)
+        static Material MakeMaterial(Color color, float glow = 0.18f)
         {
             var shader = Shader.Find("Universal Render Pipeline/Lit") ?? Shader.Find("Universal Render Pipeline/Unlit");
             if (shader == null)
@@ -156,7 +172,7 @@ namespace PotionCoop.Game
             {
                 // The hall is dim; a faint glow keeps the other player easy to spot.
                 material.EnableKeyword("_EMISSION");
-                material.SetColor("_EmissionColor", color * 0.18f);
+                material.SetColor("_EmissionColor", color * glow);
             }
             return material;
         }

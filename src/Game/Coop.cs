@@ -151,6 +151,7 @@ namespace PotionCoop.Game
             Array.Clear(MismatchStreak, 0, MismatchStreak.Length);
             _ghost?.Destroy();
             _ghost = null;
+            CatSync.Release();
         }
 
         // ---------- per-frame ----------
@@ -190,6 +191,10 @@ namespace PotionCoop.Game
                 ScanStep();
                 _ghost?.Tick(Time.unscaledDeltaTime);
                 World.TickMotion(_ghost, Time.unscaledDeltaTime);
+                if (IsHost)
+                    CatSync.HostTick(_session, Now);
+                else
+                    CatSync.ClientTick(Time.unscaledDeltaTime);
                 World.TickDiagnostics();
             }
             else if (_ghost != null && !GameRefs.InLevel)
@@ -296,6 +301,13 @@ namespace PotionCoop.Game
             if (!_ready)
                 return;
 
+            if (msg.type == "cat")
+            {
+                if (GameRefs.InLevel && !IsHost)
+                    CatSync.OnCat(msg.body.ToObject<CatMsg>());
+                return;
+            }
+
             if (msg.type == "p")
             {
                 if (GameRefs.InLevel)
@@ -315,7 +327,7 @@ namespace PotionCoop.Game
             {
                 case "s":
                     var states = body.ToObject<StatesMsg>();
-                    var changed = World.Apply(states.Potions, states.Vats);
+                    var changed = World.Apply(states.Potions, states.Vats, animate: !states.Resync);
                     if (states.Resync || changed > 0)
                         CoopMod.Log.Msg($"applied {states.Potions.Count} vessel(s), {states.Vats.Count} vat(s): {changed} changed{(states.Resync ? " [resync]" : "")}");
                     break;
@@ -602,6 +614,7 @@ namespace PotionCoop.Game
             _lastHeld.Clear();
             _initialSyncRequested = false;
             World.ResetLevel();
+            CatSync.Forget();
         }
     }
 }

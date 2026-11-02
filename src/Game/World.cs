@@ -177,7 +177,8 @@ namespace PotionCoop.Game
         }
 
         /// <summary>Brings the given vessels to the given states. Returns how many changed.</summary>
-        public static int Apply(IReadOnlyList<NetPotion> states, IReadOnlyList<NetVat> vats)
+        /// <param name="animate">Live changes glide into place; bulk resyncs snap.</param>
+        public static int Apply(IReadOnlyList<NetPotion> states, IReadOnlyList<NetVat> vats, bool animate = true)
         {
             var populator = GameRefs.Populator;
             var persistence = GameRefs.Persistence;
@@ -227,7 +228,7 @@ namespace PotionCoop.Game
 
                     if (!SamePlace(target, current))
                     {
-                        Place(populator, persistence, potion, target);
+                        Place(populator, persistence, potion, target, animate);
                         moved = true;
                     }
                     else
@@ -279,7 +280,7 @@ namespace PotionCoop.Game
         static Quaternion ToRotation(float[] r) => new(r[0], r[1], r[2], r[3]);
 
         static void Place(LabPotionsPopulator populator, Il2CppCodeBase.Services.PotionsPersistenceService.IPotionsPersistence persistence,
-            PotionFacade potion, NetPotion target)
+            PotionFacade potion, NetPotion target, bool animate)
         {
             var uid = target.Uid;
             var fromHand = RemoteHeld.Contains(uid);
@@ -339,22 +340,36 @@ namespace PotionCoop.Game
                 case NetLocation.Floor:
                     var pos = target.Pos != null ? ToVector(target.Pos) : potion.transform.position;
                     var rot = target.Rot != null ? ToRotation(target.Rot) : potion.transform.rotation;
-                    var falling = target.Falling;
+                    if (target.Falling)
+                    {
+                        // Just let go on the other side; its rest pose follows in a moment. Our physics would freeze a
+                        // slow bottle mid-air, so we animate the fall ourselves onto whatever lies below.
+                        var landing = LandingBelow(pos);
+                        var lying = Quaternion.Euler(0f, rot.eulerAngles.y, 90f);
+                        void LandFallen()
+                        {
+                            RestoreColliders(potion);
+                            DropAt(potion, landing, lying);
+                            Falling.Add(uid);
+                            persistence.RecordDropped(potion);
+                        }
+                        if (fromHand)
+                            Fly(potion, pos, rot, () => Fly(potion, landing, lying, LandFallen, gravity: true));
+                        else
+                            Fly(potion, landing, lying, LandFallen, gravity: true);
+                        break;
+                    }
+
                     void Land()
                     {
                         RestoreColliders(potion);
                         DropAt(potion, pos, rot);
-                        if (falling)
-                        {
-                            // Still falling on the other side: let our physics drop it too; the rest pose follows.
-                            potion.Unfreeze();
-                            Falling.Add(uid);
-                        }
-                        else
-                            Falling.Remove(uid);
+                        Falling.Remove(uid);
                         persistence.RecordDropped(potion);
                     }
-                    if (fromHand)
+                    // Out of the ghost's hands, or a short correction of where a bottle came to rest: glide there.
+                    var nearby = (potion.transform.position - pos).sqrMagnitude < 4f;
+                    if (fromHand || (animate && nearby))
                         Fly(potion, pos, rot, Land);
                     else
                         Land();
@@ -442,6 +457,14 @@ namespace PotionCoop.Game
             Diagnose(potion, path);
         }
 
+        /// <summary>The first thing below a point (floor, table or a pile of bottles), plus half a bottle's thickness.</summary>
+        static Vector3 LandingBelow(Vector3 from)
+        {
+            if (Physics.Raycast(from + Vector3.up * 0.05f, Vector3.down, out var hit, 8f, ~0, QueryTriggerInteraction.Ignore))
+                return hit.point + Vector3.up * 0.04f;
+            return from;
+        }
+
         // ---- motion: carried bottles follow the ghost, placed bottles fly out of its hands ----
 
         sealed class Flight
@@ -451,15 +474,21 @@ namespace PotionCoop.Game
             public Vector3 FromPos, ToPos;
             public Quaternion FromRot, ToRot;
             public float Start, Duration;
+            /// <summary>Accelerate like a falling object instead of easing in and out along an arc.</summary>
+            public bool Gravity;
             public Action Done;
         }
 
         static readonly List<Flight> Flights = new();
 
-        static void Fly(PotionFacade potion, Vector3 toPos, Quaternion toRot, Action done)
+        static void Fly(PotionFacade potion, Vector3 toPos, Quaternion toRot, Action done, bool gravity = false)
         {
             var t = potion.transform;
             var distance = Vector3.Distance(t.position, toPos);
+            // A real fall takes sqrt(2h/g); a short glide or toss scales with distance.
+            var duration = gravity
+                ? Mathf.Clamp(Mathf.Sqrt(2f * Mathf.Max(0.01f, t.position.y - toPos.y) / 9.81f), 0.12f, 0.7f)
+                : Mathf.Clamp(0.18f + distance * 0.12f, 0.2f, 0.6f);
             Flights.Add(new Flight
             {
                 Potion = potion,
@@ -469,7 +498,8 @@ namespace PotionCoop.Game
                 ToPos = toPos,
                 ToRot = toRot,
                 Start = Time.realtimeSinceStartup,
-                Duration = Mathf.Clamp(0.18f + distance * 0.12f, 0.2f, 0.6f),
+                Duration = duration,
+                Gravity = gravity,
                 Done = done,
             });
         }
@@ -529,8 +559,8 @@ namespace PotionCoop.Game
                     Complete(flight);
                     continue;
                 }
-                var eased = p * p * (3f - 2f * p);
-                var arc = Mathf.Sin(p * Mathf.PI) * Mathf.Min(0.3f, Vector3.Distance(flight.FromPos, flight.ToPos) * 0.25f);
+                var eased = flight.Gravity ? p * p : p * p * (3f - 2f * p);
+                var arc = flight.Gravity ? 0f : Mathf.Sin(p * Mathf.PI) * Mathf.Min(0.3f, Vector3.Distance(flight.FromPos, flight.ToPos) * 0.25f);
                 flight.Potion.transform.SetPositionAndRotation(
                     Vector3.Lerp(flight.FromPos, flight.ToPos, eased) + Vector3.up * arc,
                     Quaternion.Slerp(flight.FromRot, flight.ToRot, eased));

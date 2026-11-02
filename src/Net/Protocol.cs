@@ -68,6 +68,17 @@ namespace PotionCoop.Net
         public int Held;
     }
 
+    /// <summary>Host's cat: pose plus animator parameters (by name hash).</summary>
+    internal sealed class CatMsg
+    {
+        public string T = "cat";
+        public float[] Pos;
+        public float[] Rot;
+        public Dictionary<int, float> F;
+        public Dictionary<int, int> I;
+        public Dictionary<int, bool> B;
+    }
+
     /// <summary>Vessel/vat states. Sent for local changes and as answers to bucket requests.</summary>
     internal sealed class StatesMsg
     {
