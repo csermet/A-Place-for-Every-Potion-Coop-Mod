@@ -44,6 +44,9 @@ namespace PotionCoop.UI
 
         public bool Focused => _focused == this;
 
+        /// <summary>Someone is typing: the game's own key actions (Back/Cancel closes windows) must wait.</summary>
+        public static bool AnyFocused => _focused != null;
+
         public void Focus()
         {
             if (_focused == this)
@@ -78,7 +81,7 @@ namespace PotionCoop.UI
                 _focused = null; // its window is gone
                 return;
             }
-            if (keyboard.backspaceKey.wasPressedThisFrame && box.Text.Length > 0)
+            if ((keyboard.backspaceKey.wasPressedThisFrame || keyboard.deleteKey.wasPressedThisFrame) && box.Text.Length > 0)
                 box.Text = box.Text.Substring(0, box.Text.Length - 1);
             if (keyboard.enterKey.wasPressedThisFrame || keyboard.numpadEnterKey.wasPressedThisFrame || keyboard.escapeKey.wasPressedThisFrame)
                 Unfocus();

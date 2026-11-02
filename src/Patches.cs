@@ -54,6 +54,13 @@ namespace PotionCoop
         }
     }
 
+    /// <summary>While the player types in a co-op text box, Back/Cancel (backspace, escape) edits the text, not the window.</summary>
+    [HarmonyPatch(typeof(Il2CppCodeBase.Components.UI.UIWindowCloser), nameof(Il2CppCodeBase.Components.UI.UIWindowCloser.Cancel_Performed))]
+    static class TypingCancelPatch
+    {
+        static bool Prefix() => !UI.TextBox.AnyFocused;
+    }
+
     /// <summary>
     /// Likewise Continue: a connected guest must load the host's lab through its profile, never the solo lab
     /// (the host's states would be written into the solo save).

@@ -93,6 +93,9 @@ namespace PotionCoop.Game
                     target.RevealPourOver(duration, false);
                     targetPoint = target.transform.position + Vector3.up * 0.12f;
                     After(duration, () => target.OnReceiveFinished(source));
+                    // Drawing from a tap: the bottle goes under the spout for the draw.
+                    if (tap != null && tap.Spout != null)
+                        World.HoldUnder(target.Uid, tap.Spout.position, duration);
                 }
                 else if (msg.To.K == VesselRef.Vat && World.FindVat(msg.To.U) is { } vat)
                 {

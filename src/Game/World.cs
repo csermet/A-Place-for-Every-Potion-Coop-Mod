@@ -391,16 +391,20 @@ namespace PotionCoop.Game
                     var rot = target.Rot != null ? ToRotation(target.Rot) : potion.transform.rotation;
                     if (target.Falling && target.Toss)
                     {
-                        // Thrown (R): the game's own throw, flipping through the air to where it was aimed.
+                        // Thrown (R): the game's own throw, flipping through the air to where it was aimed. The aim
+                        // pose is upright, but a thrown bottle almost always ends up lying: land it on its side,
+                        // the real resting pose follows as a small correction.
+                        var thrownLanding = LandingBelow(potion, pos + Vector3.up * 0.3f);
+                        var thrownLying = Quaternion.Euler(0f, rot.eulerAngles.y, 90f);
                         void LandThrown()
                         {
                             RestoreColliders(potion);
-                            DropAt(potion, pos, rot);
+                            DropAt(potion, thrownLanding, thrownLying);
                             ApplyCork(potion, animate);
                             Falling.Add(uid);
                             persistence.RecordDropped(potion);
                         }
-                        Throw(potion, pos, rot, LandThrown);
+                        Throw(potion, thrownLanding, thrownLying, LandThrown);
                         break;
                     }
                     if (target.Falling)
@@ -760,19 +764,29 @@ namespace PotionCoop.Game
                     CarryBlends[uid] = (potion.transform.position, potion.transform.rotation, now);
         }
 
-        // A pour of the other player: their bottle tips over the target for the length of the pour.
-        static readonly Dictionary<int, (Vector3 target, float start, float duration)> PourTilts = new();
+        // A pour of the other player: their bottle tips over the target (or is held under a vat's tap)
+        // for the length of the pour.
+        static readonly Dictionary<int, (Vector3 target, float start, float duration, bool underTap)> PourTilts = new();
 
         public static void TipOver(int uid, Vector3 target, float duration)
         {
             if (RemoteHeld.Contains(uid))
-                PourTilts[uid] = (target, Time.realtimeSinceStartup, duration);
+                PourTilts[uid] = (target, Time.realtimeSinceStartup, duration, false);
         }
 
-        static (Vector3 pos, Quaternion rot) PourPose(Vector3 hold, Vector3 target)
+        public static void HoldUnder(int uid, Vector3 spout, float duration)
+        {
+            if (RemoteHeld.Contains(uid))
+                PourTilts[uid] = (spout, Time.realtimeSinceStartup, duration, true);
+        }
+
+        static (Vector3 pos, Quaternion rot) PourPose(Vector3 hold, Vector3 target, bool underTap)
         {
             var flat = new Vector3(target.x - hold.x, 0f, target.z - hold.z);
             var dir = flat.sqrMagnitude > 0.0001f ? flat.normalized : Vector3.forward;
+            // Upright, its opening right below the tap.
+            if (underTap)
+                return (target - Vector3.up * 0.2f, Quaternion.LookRotation(dir));
             // Neck over the target's opening, bottle leaning past horizontal.
             var pos = target - dir * 0.08f + Vector3.up * 0.22f;
             var rot = Quaternion.AngleAxis(115f, Vector3.Cross(Vector3.up, dir)) * Quaternion.LookRotation(dir);
@@ -802,7 +816,7 @@ namespace PotionCoop.Game
                         {
                             var w = Mathf.Clamp01(Mathf.Min(elapsed / 0.2f, (total - elapsed) / 0.25f));
                             w = w * w * (3f - 2f * w);
-                            var pour = PourPose(pos, tilt.target);
+                            var pour = PourPose(pos, tilt.target, tilt.underTap);
                             pos = Vector3.Lerp(pos, pour.pos, w);
                             rot = Quaternion.Slerp(rot, pour.rot, w);
                         }

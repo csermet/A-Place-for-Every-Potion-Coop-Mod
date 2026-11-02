@@ -32,10 +32,16 @@
   </ItemGroup>
 
   <!-- Drop the built mod straight into the game's Mods folder -->
-  <Target Name="CopyToMods" AfterTargets="Build">
+  <Target Name="CopyToMods" AfterTargets="Build" Condition="'$(Staging)' != 'true'">
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(GameDir)\Mods" />
     <!-- Setup guide and firewall helper travel with the game folder to the friend's PC -->
     <Copy SourceFiles="@(DistFiles)" DestinationFolder="$(GameDir)" />
+  </Target>
+
+  <!-- While the game runs (DLL locked): dotnet build -p:Staging=true puts the next version in dist-next\ to install later -->
+  <Target Name="CopyToStaging" AfterTargets="Build" Condition="'$(Staging)' == 'true'">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(MSBuildProjectDirectory)\dist-next\Mods" />
+    <Copy SourceFiles="@(DistFiles)" DestinationFolder="$(MSBuildProjectDirectory)\dist-next" />
   </Target>
 
   <ItemGroup>
