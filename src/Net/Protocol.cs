@@ -222,7 +222,7 @@ namespace PotionCoop.Net
 
     internal static class Protocol
     {
-        public const string ModVersion = "0.4.6";
+        public const string ModVersion = "0.4.7";
         public const int BucketCount = 17;
 
         static readonly JsonSerializerSettings Settings = new()

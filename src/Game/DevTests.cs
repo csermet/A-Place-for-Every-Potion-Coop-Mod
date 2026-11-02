@@ -78,6 +78,12 @@ namespace PotionCoop.Game
                 try { action(); }
                 catch (Exception e) { CoopMod.Log.Error($"[test] step: {e}"); }
             }
+            try { ShowTick(); }
+            catch (Exception e)
+            {
+                CoopMod.Log.Error($"[test] avatar: {e}");
+                _showPhase = null;
+            }
         }
 
         static void At(float delay, Action action) => Steps.Add((Now + delay, action));
@@ -97,6 +103,9 @@ namespace PotionCoop.Game
                     break;
                 case "sepcoop":
                     SeparatorCoop();
+                    break;
+                case "avatar":
+                    AvatarShow();
                     break;
                 default:
                     CoopMod.Log.Warning($"[test] unknown test {test}");
@@ -242,6 +251,99 @@ namespace PotionCoop.Game
                 var poured = separator.PourOutOf(free[0], false);
                 CoopMod.Log.Msg($"[test] PourOutOf(holder {free[0].Index}) = {poured}");
             });
+        }
+
+        // ---- avatar: the other player's character shown in front of the camera, move after move ----
+
+        static Ghost _show;
+        static Vector3 _showAnchor;
+        static float _showYaw;
+        static string _showPhase;
+        static float _showAngle;
+        static readonly List<PotionFacade> ShowBottles = new();
+
+        static void AvatarShow()
+        {
+            var camera = Camera.main;
+            var hero = GameRefs.Hero;
+            var forward = camera.transform.forward;
+            forward.y = 0f;
+            forward.Normalize();
+            _showAnchor = camera.transform.position + forward * 3.2f;
+            _showAnchor.y = hero.Position.y;
+            _showYaw = Quaternion.LookRotation(-forward).eulerAngles.y;
+            _show = new Ghost(new Color(0.35f, 0.55f, 0.95f), _showAnchor) { Name = "Preview" };
+            var populator = GameRefs.Populator;
+            foreach (var entry in populator._potionsByUid)
+                if (entry.Value != null && Resting(populator, entry.Value) && entry.Value.Contents.Count >= 2 && ShowBottles.Count < 2)
+                    ShowBottles.Add(entry.Value);
+
+            var phases = new[] { "idle", "walk", "run", "carry", "carrywalk", "pour", "throw", "lookdown", "lookup", "back" };
+            for (var i = 0; i < phases.Length; i++)
+            {
+                var phase = phases[i];
+                At(i * 6f, () =>
+                {
+                    _showPhase = phase;
+                    CoopMod.Log.Msg($"[test] avatar phase {phase}");
+                    if (phase == "pour")
+                        _show.Act("pour");
+                    if (phase == "throw")
+                        _show.Act("throw");
+                });
+            }
+            At(phases.Length * 6f, () =>
+            {
+                CoopMod.Log.Msg("[test] avatar done");
+                _showPhase = null;
+            });
+        }
+
+        static void ShowTick()
+        {
+            if (_show == null || _showPhase == null)
+                return;
+            var dt = Time.unscaledDeltaTime;
+            var pos = _showAnchor;
+            var yaw = _showYaw;
+            var pitch = 0f;
+            var held = 0;
+            switch (_showPhase)
+            {
+                case "walk":
+                case "run":
+                case "carrywalk":
+                    var speed = _showPhase == "run" ? 4.2f : 1.6f;
+                    _showAngle += dt * speed / 1.2f;
+                    pos = _showAnchor + new Vector3(Mathf.Cos(_showAngle), 0f, Mathf.Sin(_showAngle)) * 1.2f;
+                    var tangent = new Vector3(-Mathf.Sin(_showAngle), 0f, Mathf.Cos(_showAngle));
+                    yaw = Quaternion.LookRotation(tangent).eulerAngles.y;
+                    held = _showPhase == "carrywalk" ? 2 : 0;
+                    break;
+                case "back":
+                    _showAngle += dt;
+                    pos = _showAnchor + Quaternion.Euler(0f, _showYaw, 0f) * Vector3.back * Mathf.PingPong(_showAngle * 1.2f, 1.5f);
+                    break;
+                case "carry":
+                case "pour":
+                    held = _showPhase == "pour" ? 1 : 2;
+                    break;
+                case "lookdown":
+                    pitch = 30f;
+                    break;
+                case "lookup":
+                    pitch = -30f;
+                    break;
+            }
+            _show.Held = held;
+            _show.SetTarget(pos, yaw, pitch);
+            _show.Tick(dt);
+            for (var i = 0; i < ShowBottles.Count; i++)
+            {
+                var (p, r) = i < held ? _show.CarryPose(i, held) : (ShowBottles[i].transform.position, ShowBottles[i].transform.rotation);
+                if (i < held)
+                    ShowBottles[i].transform.SetPositionAndRotation(p, r);
+            }
         }
 
         static readonly System.Random Random = new();

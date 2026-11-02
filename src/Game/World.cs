@@ -556,6 +556,7 @@ namespace PotionCoop.Game
                             persistence.RecordDropped(potion);
                         }
                         Throw(potion, thrownLanding, thrownLying, LandThrown);
+                        Coop.Ghost?.Act("throw");
                         break;
                     }
                     if (target.Falling)

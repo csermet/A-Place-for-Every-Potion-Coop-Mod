@@ -104,6 +104,7 @@ namespace PotionCoop.Game
             if (moved < units)
                 CoopMod.Log.Msg($"pour of {units} {family}: only {moved} can move here (the vessels just changed on this side too)");
 
+            Coop.Ghost?.Act("pour");
             Vector3? targetPoint = null;
             World.AsApplying(() =>
             {

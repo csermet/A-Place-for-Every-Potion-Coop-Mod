@@ -5,23 +5,29 @@ using Object = UnityEngine.Object;
 namespace PotionCoop.Game
 {
     /// <summary>
-    /// The other player's body: a little alchemist built at runtime from generated meshes (smooth robe, swinging arms,
-    /// stepping shoes, a bent pointy hat with a star, a white beard, blinking eyes). No colliders, no injected components;
-    /// <see cref="Coop"/> moves it every frame towards the last received pose.
+    /// The other player's body: a hooded alchemist built at runtime from generated meshes. A long robe in the
+    /// player's color with a gold hem, a mantle, a pointed hood whose dark opening shows two glowing eyes, gloved
+    /// hands, potion vials on the belt. It walks with a bob and swinging sleeves, holds carried bottles in its hands and
+    /// makes small moves when pouring or throwing. No colliders, no injected components; <see cref="Coop"/> moves it
+    /// every frame towards the last received pose.
     /// </summary>
     internal sealed class Ghost
     {
-        const float HeadHeight = 1.47f;
+        const float HeadHeight = 1.44f;
+        const float Scale = 1.12f;
         const float HideCloserThan = 0.6f;
 
-        static readonly Color Skin = new(0.95f, 0.78f, 0.64f);
-        static readonly Color Gold = new(1f, 0.78f, 0.3f);
+        static readonly Color Gold = new(0.86f, 0.66f, 0.3f);
+        static readonly Color Leather = new(0.24f, 0.15f, 0.1f);
+        static readonly Color EyeGlow = new(1f, 0.78f, 0.42f);
+        static readonly Color[] Vials = { new(0.86f, 0.2f, 0.32f), new(0.2f, 0.72f, 0.68f), new(0.95f, 0.78f, 0.25f) };
 
         readonly GameObject _root;
         readonly GameObject _visual;
         readonly Transform _body;
         readonly Transform _head;
         readonly Transform _armL, _armR;
+        readonly Transform _handL, _handR;
         readonly Transform _footL, _footR;
         readonly List<Transform> _eyes = new();
 
@@ -29,81 +35,93 @@ namespace PotionCoop.Game
         float _targetYaw, _targetPitch, _yaw, _pitch;
         float _speed, _walkPhase, _time;
         float _nextBlink = 2f, _blinkUntil;
+        string _move;
+        float _moveTime;
+        int _lastHeld;
 
         public string Name;
         public bool InMenu;
         public int Held;
         public Vector3 Position => _root.transform.position;
-        public Vector3 LabelAnchor => _root.transform.position + Vector3.up * 2.3f;
+        public Vector3 LabelAnchor => _root.transform.position + Vector3.up * (2.05f * Scale);
         public bool Alive => _root != null;
 
         public Ghost(Color playerColor, Vector3 position)
         {
-            var robeColor = Color.Lerp(playerColor, new Color(0.5f, 0.5f, 0.5f), 0.18f);
+            // The player's color, deepened towards plum so it sits well in the candle-lit hall.
+            var robeColor = Color.Lerp(playerColor, new Color(0.2f, 0.14f, 0.24f), 0.3f);
             var robe = MakeMaterial(robeColor);
-            var trim = MakeMaterial(robeColor * 0.5f);
-            var hatColor = MakeMaterial(robeColor * 0.82f);
-            var skin = MakeMaterial(Skin, glow: 0.05f);
-            var white = MakeMaterial(new Color(0.96f, 0.95f, 0.92f), glow: 0.05f);
-            var dark = MakeMaterial(new Color(0.07f, 0.05f, 0.04f), glow: 0f);
-            var shoe = MakeMaterial(new Color(0.22f, 0.13f, 0.08f), glow: 0f);
-            var gold = MakeMaterial(Gold, glow: 0.35f);
+            var hood = MakeMaterial(robeColor * 0.86f);
+            var mantle = MakeMaterial(robeColor * 0.74f);
+            var lining = MakeMaterial(Color.Lerp(robeColor, new Color(0.9f, 0.84f, 0.72f), 0.35f));
+            var shadow = MakeMaterial(new Color(0.03f, 0.02f, 0.035f), glow: 0f);
+            var glove = MakeMaterial(Leather, glow: 0.02f);
+            var gold = MakeMaterial(Gold, glow: 0.3f);
+            var eyes = MakeMaterial(EyeGlow, glow: 2.4f);
 
             _root = new GameObject("PotionCoop.Ghost");
             Object.DontDestroyOnLoad(_root);
             _root.transform.position = position;
+            _targetPos = position;
             _visual = new GameObject("Visual");
             _visual.transform.SetParent(_root.transform, false);
+            // Built at a small size; scaled so the eyes sit about where the player's own eyes are.
+            _visual.transform.localScale = Vector3.one * Scale;
 
             // Everything under the body bobs and sways while walking.
             _body = Node("Body", _visual.transform, Vector3.zero);
 
-            // Robe: a smooth bell, wider at the hem, narrowing to the shoulders.
+            // Robe: a long bell to the floor, with a gold hem.
             Mesh("Robe", _body, Lathe(new[]
             {
-                new Vector2(0.36f, 0.00f), new Vector2(0.35f, 0.08f), new Vector2(0.31f, 0.35f), new Vector2(0.26f, 0.70f),
-                new Vector2(0.22f, 1.00f), new Vector2(0.18f, 1.18f), new Vector2(0.10f, 1.27f), new Vector2(0.0f, 1.29f),
+                new Vector2(0.34f, 0.00f), new Vector2(0.335f, 0.07f), new Vector2(0.30f, 0.35f), new Vector2(0.25f, 0.72f),
+                new Vector2(0.21f, 1.00f), new Vector2(0.19f, 1.16f), new Vector2(0.12f, 1.26f), new Vector2(0.0f, 1.28f),
             }), robe);
-            Mesh("Hem", _body, Lathe(new[] { new Vector2(0.372f, 0.0f), new Vector2(0.366f, 0.06f), new Vector2(0.35f, 0.075f) }, capTop: false), trim);
-            Mesh("Belt", _body, Lathe(new[] { new Vector2(0.268f, 0.68f), new Vector2(0.262f, 0.73f) }, capBottom: false, capTop: false), trim);
-            Shape(PrimitiveType.Cube, "Buckle", _body, gold, new Vector3(0f, 0.705f, 0.262f), new Vector3(0.075f, 0.06f, 0.02f));
-            Shape(PrimitiveType.Sphere, "Collar", _body, trim, new Vector3(0f, 1.22f, 0f), new Vector3(0.40f, 0.12f, 0.32f));
+            Mesh("Hem", _body, Lathe(new[] { new Vector2(0.346f, 0.0f), new Vector2(0.341f, 0.055f), new Vector2(0.336f, 0.07f) }, capBottom: false, capTop: false), gold);
+
+            // Leather belt with a buckle and three little potions hanging at the side.
+            Mesh("Belt", _body, Lathe(new[] { new Vector2(0.262f, 0.69f), new Vector2(0.256f, 0.75f) }, capBottom: false, capTop: false), glove);
+            Shape(PrimitiveType.Cube, "Buckle", _body, gold, new Vector3(0f, 0.72f, 0.258f), new Vector3(0.06f, 0.055f, 0.02f));
+            for (var i = 0; i < Vials.Length; i++)
+            {
+                var angle = (28f + i * 22f) * Mathf.Deg2Rad;
+                var at = new Vector3(Mathf.Sin(angle) * 0.275f, 0.635f, Mathf.Cos(angle) * 0.275f);
+                Shape(PrimitiveType.Capsule, "Vial", _body, MakeMaterial(Vials[i], glow: 0.6f), at, new Vector3(0.045f, 0.045f, 0.045f));
+                Shape(PrimitiveType.Cube, "Cork", _body, glove, at + Vector3.up * 0.05f, new Vector3(0.022f, 0.02f, 0.022f));
+            }
+
+            // A short mantle over the shoulders, edged in gold.
+            Mesh("Mantle", _body, Lathe(new[]
+            {
+                new Vector2(0.31f, 0.96f), new Vector2(0.29f, 1.04f), new Vector2(0.24f, 1.16f), new Vector2(0.15f, 1.25f),
+                new Vector2(0.06f, 1.29f), new Vector2(0f, 1.30f),
+            }, capBottom: false), mantle);
+            Mesh("MantleEdge", _body, Lathe(new[] { new Vector2(0.316f, 0.955f), new Vector2(0.311f, 0.978f) }, capBottom: false, capTop: false), gold);
 
             // Shoes peek out under the hem and take turns stepping forward.
-            _footL = Node("FootL", _body, new Vector3(-0.1f, 0.035f, 0.24f));
-            _footR = Node("FootR", _body, new Vector3(0.1f, 0.035f, 0.24f));
-            Shape(PrimitiveType.Sphere, "Shoe", _footL, shoe, Vector3.zero, new Vector3(0.12f, 0.07f, 0.22f));
-            Shape(PrimitiveType.Sphere, "Shoe", _footR, shoe, Vector3.zero, new Vector3(0.12f, 0.07f, 0.22f));
+            _footL = Node("FootL", _body, new Vector3(-0.1f, 0.035f, 0.22f));
+            _footR = Node("FootR", _body, new Vector3(0.1f, 0.035f, 0.22f));
+            Shape(PrimitiveType.Sphere, "Shoe", _footL, glove, Vector3.zero, new Vector3(0.11f, 0.065f, 0.2f));
+            Shape(PrimitiveType.Sphere, "Shoe", _footR, glove, Vector3.zero, new Vector3(0.11f, 0.065f, 0.2f));
 
-            // Arms hang from shoulder pivots so they can swing.
-            _armL = Arm("ArmL", -1f, robe, skin);
-            _armR = Arm("ArmR", 1f, robe, skin);
+            // Arms hang from shoulder pivots so they can swing; gloved hands at the end of wide sleeves.
+            (_armL, _handL) = Arm("ArmL", -1f, robe, gold, glove);
+            (_armR, _handR) = Arm("ArmR", 1f, robe, gold, glove);
 
+            // The hood: a rounded shell with a pointed tip falling back, and in its dark opening two glowing eyes.
             _head = Node("Head", _body, Vector3.up * HeadHeight);
-            Shape(PrimitiveType.Sphere, "Face", _head, skin, Vector3.zero, Vector3.one * 0.34f);
-            Eye(-0.066f, white, dark);
-            Eye(0.066f, white, dark);
-            Shape(PrimitiveType.Sphere, "Nose", _head, skin, new Vector3(0f, -0.02f, 0.17f), new Vector3(0.07f, 0.065f, 0.07f));
-            // Beard: a white wedge from the chin, pointing down and a little forward, clear of the collar.
-            var beard = Node("Beard", _head, new Vector3(0f, -0.085f, 0.115f));
-            beard.localRotation = Quaternion.Euler(155f, 0f, 0f);
-            Mesh("Wedge", beard, Lathe(new[] { new Vector2(0.11f, 0f), new Vector2(0.075f, 0.11f), new Vector2(0.0f, 0.23f) }), white,
-                scale: new Vector3(1f, 1f, 0.55f));
-
-            // Hat: a wide brim resting on the head, a cone in two parts with the tip bent back, a gold band and a star.
-            var hat = Node("Hat", _head, new Vector3(0f, 0.085f, -0.005f));
-            hat.localRotation = Quaternion.Euler(-8f, 0f, 0f);
-            Mesh("Brim", hat, Lathe(new[] { new Vector2(0.27f, 0f), new Vector2(0.26f, 0.018f), new Vector2(0.17f, 0.03f) }), hatColor);
-            Mesh("Cone", hat, Lathe(new[] { new Vector2(0.165f, 0.02f), new Vector2(0.125f, 0.16f), new Vector2(0.088f, 0.27f) }, capBottom: false), hatColor);
-            Mesh("Band", hat, Lathe(new[] { new Vector2(0.168f, 0.025f), new Vector2(0.158f, 0.075f) }, capBottom: false, capTop: false), gold);
-            var tip = Node("Tip", hat, new Vector3(0f, 0.27f, 0f));
-            tip.localRotation = Quaternion.Euler(-28f, 0f, 0f);
-            Mesh("Cone", tip, Lathe(new[] { new Vector2(0.088f, 0f), new Vector2(0.05f, 0.12f), new Vector2(0.012f, 0.24f), new Vector2(0f, 0.25f) }, capBottom: false), hatColor);
-            var star = Node("Star", hat, new Vector3(0f, 0.15f, 0.138f));
-            star.localRotation = Quaternion.Euler(-16f, 0f, 0f);
-            Mesh("Star", star, Star(0.045f, 0.019f), gold);
-
-            _targetPos = position;
+            Mesh("Hood", _head, Lathe(new[]
+            {
+                new Vector2(0.17f, -0.16f), new Vector2(0.205f, -0.06f), new Vector2(0.215f, 0.04f), new Vector2(0.19f, 0.14f),
+                new Vector2(0.13f, 0.22f), new Vector2(0.06f, 0.27f), new Vector2(0f, 0.28f),
+            }), hood);
+            var tip = Node("Tip", _head, new Vector3(0f, 0.24f, -0.05f));
+            tip.localRotation = Quaternion.Euler(-38f, 0f, 0f);
+            Mesh("Tip", tip, Lathe(new[] { new Vector2(0.065f, 0f), new Vector2(0.04f, 0.1f), new Vector2(0.012f, 0.18f), new Vector2(0f, 0.19f) }, capBottom: false), hood);
+            Shape(PrimitiveType.Sphere, "Rim", _head, lining, new Vector3(0f, -0.015f, 0.158f), new Vector3(0.29f, 0.31f, 0.17f));
+            Shape(PrimitiveType.Sphere, "Opening", _head, shadow, new Vector3(0f, -0.015f, 0.172f), new Vector3(0.245f, 0.265f, 0.16f));
+            Eye(-0.052f, eyes);
+            Eye(0.052f, eyes);
         }
 
         // ---- construction helpers ----
@@ -116,26 +134,27 @@ namespace PotionCoop.Game
             return t;
         }
 
-        Transform Arm(string name, float side, Material sleeve, Material skin)
+        (Transform pivot, Transform hand) Arm(string name, float side, Material sleeve, Material cuff, Material glove)
         {
-            var pivot = Node(name, _body, new Vector3(0.175f * side, 1.17f, 0f));
-            // A sleeve flaring towards the cuff, hanging down from the shoulder, and a hand at its end.
+            var pivot = Node(name, _body, new Vector3(0.2f * side, 1.17f, 0f));
+            // A sleeve flaring towards a gold cuff, hanging down from the shoulder, and a gloved hand at its end.
             var hang = Node("Hang", pivot, Vector3.zero);
             hang.localRotation = Quaternion.Euler(180f, 0f, 0f);
-            Mesh("Sleeve", hang, Lathe(new[] { new Vector2(0.055f, 0f), new Vector2(0.07f, 0.25f), new Vector2(0.085f, 0.38f) }, capBottom: false), sleeve);
-            Shape(PrimitiveType.Sphere, "Hand", pivot, skin, new Vector3(0f, -0.42f, 0f), Vector3.one * 0.105f);
-            return pivot;
+            Mesh("Sleeve", hang, Lathe(new[] { new Vector2(0.05f, 0f), new Vector2(0.065f, 0.22f), new Vector2(0.088f, 0.36f) }, capBottom: false, capTop: false), sleeve);
+            Mesh("Cuff", hang, Lathe(new[] { new Vector2(0.09f, 0.335f), new Vector2(0.091f, 0.365f) }, capBottom: false, capTop: false), cuff);
+            var hand = Shape(PrimitiveType.Sphere, "Hand", pivot, glove, new Vector3(0f, -0.41f, 0f), new Vector3(0.095f, 0.11f, 0.095f));
+            return (pivot, hand);
         }
 
-        void Eye(float x, Material white, Material dark)
+        /// <summary>A glowing eye in the hood's dark opening; blinking squashes it.</summary>
+        void Eye(float x, Material glow)
         {
-            var eye = Node("Eye", _head, new Vector3(x, 0.028f, 0.142f));
-            Shape(PrimitiveType.Sphere, "White", eye, white, Vector3.zero, Vector3.one * 0.07f);
-            Shape(PrimitiveType.Sphere, "Pupil", eye, dark, new Vector3(0f, 0f, 0.024f), Vector3.one * 0.038f);
+            var eye = Node("Eye", _head, new Vector3(x, 0.0f, 0.248f));
+            Shape(PrimitiveType.Sphere, "Glow", eye, glow, Vector3.zero, new Vector3(0.042f, 0.05f, 0.02f));
             _eyes.Add(eye);
         }
 
-        static void Shape(PrimitiveType type, string name, Transform parent, Material material, Vector3 localPos, Vector3 scale)
+        static Transform Shape(PrimitiveType type, string name, Transform parent, Material material, Vector3 localPos, Vector3 scale)
         {
             var go = GameObject.CreatePrimitive(type);
             go.name = name;
@@ -146,6 +165,7 @@ namespace PotionCoop.Game
             go.transform.SetParent(parent, false);
             go.transform.localPosition = localPos;
             go.transform.localScale = scale;
+            return go.transform;
         }
 
         static void Mesh(string name, Transform parent, Mesh mesh, Material material, Vector3? scale = null)
@@ -173,15 +193,16 @@ namespace PotionCoop.Game
                 for (var i = 0; i < segments; i++)
                 {
                     var next = (i + 1) % segments;
+                    // Clockwise seen from outside (Unity's front faces): the surface faces out.
                     int a = k * segments + i, b = (k + 1) * segments + i, c = k * segments + next, d = (k + 1) * segments + next;
-                    triangles.AddRange(new[] { a, b, c, c, b, d });
+                    triangles.AddRange(new[] { a, c, b, c, d, b });
                 }
             if (capBottom && profile[0].x > 0.0001f)
             {
                 var center = vertices.Count;
                 vertices.Add(new Vector3(0f, profile[0].y, 0f));
                 for (var i = 0; i < segments; i++)
-                    triangles.AddRange(new[] { center, i, (i + 1) % segments });
+                    triangles.AddRange(new[] { center, (i + 1) % segments, i });
             }
             var last = (rings - 1) * segments;
             if (capTop && profile[rings - 1].x > 0.0001f)
@@ -189,32 +210,7 @@ namespace PotionCoop.Game
                 var center = vertices.Count;
                 vertices.Add(new Vector3(0f, profile[rings - 1].y, 0f));
                 for (var i = 0; i < segments; i++)
-                    triangles.AddRange(new[] { center, last + (i + 1) % segments, last + i });
-            }
-            var mesh = new Mesh();
-            mesh.vertices = vertices.ToArray();
-            mesh.triangles = triangles.ToArray();
-            mesh.RecalculateNormals();
-            mesh.RecalculateBounds();
-            return mesh;
-        }
-
-        /// <summary>A flat five-pointed star facing +Z, with a little thickness so it reads from the side.</summary>
-        static Mesh Star(float outer, float inner)
-        {
-            var vertices = new List<Vector3> { new(0f, 0f, 0.006f), new(0f, 0f, -0.002f) };
-            for (var i = 0; i < 10; i++)
-            {
-                var a = Mathf.PI / 2f + i * Mathf.PI / 5f;
-                var r = i % 2 == 0 ? outer : inner;
-                vertices.Add(new Vector3(Mathf.Cos(a) * r, Mathf.Sin(a) * r, 0f));
-            }
-            var triangles = new List<int>();
-            for (var i = 0; i < 10; i++)
-            {
-                int p = 2 + i, q = 2 + (i + 1) % 10;
-                triangles.AddRange(new[] { 0, q, p }); // front, slightly raised
-                triangles.AddRange(new[] { 1, p, q }); // back
+                    triangles.AddRange(new[] { center, last + i, last + (i + 1) % segments });
             }
             var mesh = new Mesh();
             mesh.vertices = vertices.ToArray();
@@ -293,12 +289,19 @@ namespace PotionCoop.Game
             _body.localScale = new Vector3(1f, 1f + breathe, 1f);
 
             var carrying = Held > 0;
+            if (Held != _lastHeld)
+            {
+                // Picked something up or put it down: a quick reach.
+                Act("reach");
+                _lastHeld = Held;
+            }
             var reach = carrying ? -62f : -8f;
             var swing = carrying ? 0f : s * 28f * walk;
-            _armL.localRotation = Quaternion.Euler(reach + swing, 0f, carrying ? 10f : -6f);
-            _armR.localRotation = Quaternion.Euler(reach - swing, 0f, carrying ? -10f : 6f);
-            _footL.localPosition = new Vector3(-0.1f, 0.035f + Mathf.Max(0f, s) * 0.04f * walk, 0.24f + s * 0.09f * walk);
-            _footR.localPosition = new Vector3(0.1f, 0.035f + Mathf.Max(0f, -s) * 0.04f * walk, 0.24f - s * 0.09f * walk);
+            var (left, right, roll) = MoveOffsets(dt);
+            _armL.localRotation = Quaternion.Euler(reach + swing + left, 0f, carrying ? 10f : -6f);
+            _armR.localRotation = Quaternion.Euler(reach - swing + right, 0f, (carrying ? -10f : 6f) + roll);
+            _footL.localPosition = new Vector3(-0.1f, 0.035f + Mathf.Max(0f, s) * 0.04f * walk, 0.22f + s * 0.09f * walk);
+            _footR.localPosition = new Vector3(0.1f, 0.035f + Mathf.Max(0f, -s) * 0.04f * walk, 0.22f - s * 0.09f * walk);
 
             // Blink now and then.
             if (_time >= _nextBlink)
@@ -320,12 +323,41 @@ namespace PotionCoop.Game
             }
         }
 
-        /// <summary>Where the i-th of n carried bottles floats: between the outstretched hands, side by side.</summary>
+        // ---- small moves of the arms ----
+
+        /// <summary>A short move: "pour" (tips the right hand), "throw" (swings the right arm), "reach" (both arms dip).</summary>
+        public void Act(string move)
+        {
+            _move = move;
+            _moveTime = 0f;
+        }
+
+        /// <summary>Extra arm angles for the move in progress: left and right swing, right-hand roll (degrees).</summary>
+        (float left, float right, float roll) MoveOffsets(float dt)
+        {
+            if (_move == null)
+                return (0f, 0f, 0f);
+            _moveTime += dt;
+            var length = _move switch { "pour" => 0.9f, "throw" => 0.5f, _ => 0.35f };
+            var k = Mathf.Clamp01(_moveTime / length);
+            if (k >= 1f)
+                _move = null;
+            var bump = Mathf.Sin(k * Mathf.PI);
+            return _move switch
+            {
+                "pour" => (0f, -18f * bump, 32f * bump),
+                // Back, then forward and up, then home.
+                "throw" => (0f, k < 0.35f ? 45f * (k / 0.35f) : Mathf.Lerp(45f, -115f, Mathf.Clamp01((k - 0.35f) / 0.35f)) * (1f - Mathf.Clamp01((k - 0.7f) / 0.3f)), 0f),
+                _ => (-28f * bump, -28f * bump, 0f),
+            };
+        }
+
+        /// <summary>Where the i-th of n carried bottles is: in the hands (one between them, two one each, more side by side).</summary>
         public (Vector3 position, Quaternion rotation) CarryPose(int index, int count)
         {
             var root = _root.transform;
-            var spread = (index - (count - 1) / 2f) * 0.12f;
-            var position = _body.position + Vector3.up * 0.98f + root.forward * 0.42f + root.right * spread;
+            var along = count <= 1 ? 0.5f : index / (float)(count - 1);
+            var position = Vector3.Lerp(_handL.position, _handR.position, along) + root.forward * 0.05f;
             return (position, root.rotation);
         }
 
