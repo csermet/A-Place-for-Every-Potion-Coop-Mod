@@ -2,6 +2,8 @@
 
 Play **A Place for Every Potion** together: two PCs on the same home network, one shared lab.
 
+> **Unofficial mod.** It is not made or supported by the game's developer, so please report problems here on GitHub, not to them. Official multiplayer is coming to the game in a future update.
+
 ![The other player, carrying bottles in the shared lab](docs/lab.jpg)
 
 - **One lab, two players.** The host's save is the world. Bottles, shelves, vats, the Essence Separator and the cat are shared, and every pick-up, pour and throw shows up on the other PC.
@@ -55,4 +57,4 @@ Logs are in `MelonLoader\Latest.log`.
 
 ---
 
-Unofficial fan mod, not affiliated with the game's developers. Undo is off while connected. Build from source with `dotnet build -c Release` (the game in `..\game`, MelonLoader installed). [MIT license](LICENSE).
+Undo is off while connected. Build from source with `dotnet build -c Release` (the game in `..\game`, MelonLoader installed). [MIT license](LICENSE).
